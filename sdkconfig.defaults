@@ -1,0 +1,26 @@
+# Target: ESP32-C5 (RISC-V), module N16R8 = 16 MB flash + 8 MB PSRAM
+CONFIG_IDF_TARGET="esp32c5"
+
+# --- Flash: N16R8 has 16 MB -----------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# --- PSRAM: ESP32-C5 supports Quad SPI PSRAM only -------------------------
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# --- Networking: more sockets for concurrent honeypot services + logger ----
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# --- Partition table: app + storage reserved for phase-2 fake filesystem --
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- HTTP server: a few more URI handlers / sockets than the default ------
+CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+# --- Console: keep UART readable while a honeypot runs --------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

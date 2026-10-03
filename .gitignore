@@ -1,0 +1,14 @@
+build/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+managed_components/
+.vscode/
+logs/
+__pycache__/
+*.pyc
+
+# host unit-test binaries
+test/host/test_evt
+test/host/test_form
+test/host/test_linekit
