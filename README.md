@@ -1,0 +1,216 @@
+# MicroPot-C5
+
+Phase 1 of a resource-constrained, multi-virtual-device honeypot running on an
+ESP32-C5 (module N16R8: 16 MB flash + 8 MB PSRAM). All experiments run only on
+an isolated lab network.
+
+Phase 1 delivers a single device IP hosting concurrent brand-driven honeypot
+services (Telnet + HTTP + banner-level SSH) with structured JSON event logging
+to a PC collector. The architecture is protocol- and brand-agnostic: adding a
+new protocol or a new brand is a pure add-on — no edits to shared code.
+
+## Architecture
+
+```
+                       +-------------------------------+
+                       |            mp_core             |
+  persona (instance)   |  service registry              |
+       +-------------> |  brand registry (open, keyed   |
+                       |    by protocol name)           |
+                       |  TCP listener + session budget |
+                       |  UDP listener (phase-2 ready)  |
+                       +-------------------------------+
+                              ^              ^
+             brand-agnostic   |              |   brand modules (data + hooks)
+       +----------------------+              +---------------------+
+       |              |       |                                    |
+  mp_telnet      mp_http   mp_ssh          mp_brand_hikvision / _router / _printer
+  (login+shell   (mgmt     (banner          behaviours[] = { "telnet", ..., "ssh" }
+   interpreter)   pages)    harvester)
+       |              |       |
+       +------+-------+-------+
+              v
+        mp_log: generic event bus (mp_evt_*) --UDP/TCP--> log_collector.py
+
+       mp_linekit: line/echo/IAC toolkit shared by text protocols
+```
+
+Two invariants keep the system extensible:
+
+- **Services are brand-agnostic interpreters.** Vendor bytes live only in
+  brand tables. `mp_brand.h` names no protocol; brands publish behaviours in
+  an open `{"proto", behavior}` table and services look theirs up with
+  `mp_brand_behavior(brand, "telnet")`.
+- **The event bus is protocol-agnostic.** Services emit events via
+  `mp_evt_begin/str/int/bool/send`; `mp_log` knows no event names. The SSH
+  service was added as proof: one new component, one registration line, zero
+  core changes.
+
+### Component layout
+
+| Path | Responsibility |
+|------|----------------|
+| `components/mp_core` | service registry, TCP/UDP listeners, global session budget, persona & brand registries, shared utils |
+| `components/mp_log` | generic event bus: builder (`mp_evt`), FreeRTOS queue, UDP/TCP transport |
+| `components/mp_net` | WiFi STA (+ reconnect backoff), optional static IP, MAC spoofing |
+| `components/mp_linekit` | line reader (echo/backspace/IAC), send helpers, canned-command lookup |
+| `components/mp_telnet` | Telnet honeypot interpreter |
+| `components/mp_http` | HTTP management-page honeypot (`esp_http_server`) |
+| `components/mp_ssh` | banner-level SSH honeypot (client-banner harvester) |
+| `components/brands/mp_brand_*` | HIKVISION camera / TP-LINK router / HP printer behaviour tables |
+| `main` | Kconfig + boot sequence |
+| `tools` | PC-side collector, mock attacker, golden regression check |
+| `test/host` | host unit tests for the pure sources (no hardware needed) |
+
+## Prerequisites
+
+ESP-IDF **v6.1** (locked). On this machine it has a dedicated activation script:
+
+```sh
+source /home/xiaoboluo/.espressif/tools/activate_idf_v6.1.sh
+```
+
+## Build & flash
+
+```sh
+source /home/xiaoboluo/.espressif/tools/activate_idf_v6.1.sh
+cd micropot-c5
+idf.py set-target esp32c5     # first time only
+idf.py build
+idf.py -p /dev/ttyACM0 flash monitor
+```
+
+## Run it
+
+1. Start the collector on the PC (same isolated LAN):
+
+   ```sh
+   python3 tools/log_collector.py --host 0.0.0.0 --port 9999 --proto both
+   ```
+
+2. Enter `idf.py menuconfig` → *MicroPot-C5 honeypot* and set:
+   - WiFi SSID / password
+   - collector IPv4 address (`Log host`) and port
+   - active persona (camera / router / printer)
+
+3. Flash. The serial log prints the obtained IP, e.g.
+   `honeypot online at 192.168.1.100`.
+
+4. Exercise it (watch events appear live):
+
+   ```sh
+   python3 tools/mock_client.py --host 192.168.1.100 --persona camera --mode all
+   # or with real tools:
+   nmap -sV -p 22,23,80 192.168.1.100
+   ssh root@192.168.1.100        # banner harvested, then the line goes quiet
+   ```
+
+   Events are appended to `logs/micropot-YYYYMMDD.jsonl`.
+
+## Event schema
+
+One JSON object per line:
+
+```json
+{"v":1,"ts":123456,"boot":7,"seq":1042,"sid":33,"evt":"telnet.login_attempt",
+ "proto":"telnet","persona":"ipcam-01",
+ "sip":"192.168.1.66","sport":51023,"dip":"192.168.1.100","dport":23,
+ "data":{"user":"admin","pass":"12345","result":"fail","attempt":1}}
+```
+
+`ts` is milliseconds since boot; `boot` increments in NVS every boot; `sid` is
+a per-session id so connect/login/command/disconnect events of one attacker
+session can be correlated (UDP pseudo-sessions keyed by peer are prepared for
+phase 2).
+
+Event types: `net.up`, `svc`, `svc.overload`, `telnet.connect`,
+`telnet.login_attempt`, `telnet.command`, `telnet.disconnect`, `http.request`,
+`http.login_attempt`, `http.notfound`, `ssh.connect`, `ssh.banner`,
+`ssh.disconnect`, `log.dropped`.
+
+Notable `data` fields: `telnet.disconnect.reason` is one of `logout`,
+`reboot`, `timeout`, `closed`, `auth_failed`, `send_error`; `ssh.banner.client`
+holds the attacker's own version string (scanner fingerprint);
+`svc.overload` fires when the global session budget
+(`CONFIG_MICROPOT_MAX_SESSIONS`) is exhausted under a flood.
+
+## Honeypot behaviours worth knowing
+
+- **Telnet echo**: the server negotiates WILL ECHO and echoes input busybox
+  style — username and shell commands visible, passwords not.
+- **`reboot` sells**: `reboot`/`shutdown` replies with the brand's canned
+  message, lingers ~1 s, then drops the session (`reason:"reboot"`).
+- **Consistent identity**: the spoofed station MAC (vendor OUI + eFuse tail)
+  is the same address that `ifconfig` reports in the shell — ARP table and
+  application layer tell one story.
+- **Brand-coherent HTTP**: `Server` header *and* the 404 page's address line
+  both come from the active brand.
+- **Flood safety**: all TCP listeners share one session budget; excess
+  connections are accepted and closed immediately (`svc.overload`), and the
+  log transport uses bounded connect/send timeouts so a dead collector can
+  never stall the honeypot.
+
+## Configuration
+
+All knobs live under *MicroPot-C5 honeypot* in `menuconfig`
+(`main/Kconfig.projbuild`): WiFi, static IP, service ports, global session
+budget, active persona, log transport and destination. Build-time defaults are
+in `sdkconfig.defaults` (target esp32c5, 16 MB flash, Quad PSRAM @ 80 MHz).
+
+## L2 identity: MAC & DHCP hostname spoofing
+
+Each brand declares a vendor OUI in `mp_brand_meta_t.mac_oui`. At boot,
+`mp_net_init()` builds the station MAC from that OUI plus the unique tail of
+the chip's factory eFuse MAC (so every board stays distinct on the wire) and
+calls `esp_wifi_set_mac()` while the interface is still disabled. The DHCP
+hostname comes from `mp_persona_t.hostname` via `esp_netif_set_hostname()`.
+
+| Brand | Vendor OUI | nmap prefix lookup | Hostname |
+|-------|-----------|--------------------|----------|
+| `hikvision_ipcam` | `44:19:B6` | Hangzhou Hikvision | IPCAM-01 |
+| `tplink_router`   | `00:1D:0F` | TP-Link Technologies | TP-LINK_WR841N |
+| `hp_printer`      | `00:01:E6` | Hewlett Packard | HP-LaserJet-M428 |
+
+To advertise a different vendor, just edit the brand's `mac_oui` (the first
+byte must have bit 0 clear, i.e. an even first octet). Other examples:
+`00:00:48` Seiko Epson, `00:00:85` Canon, `00:00:39` Toshiba, `00:00:01` Xerox.
+
+> Only use this on your own isolated lab network.
+
+## Testing & regression
+
+```sh
+# host unit tests (event builder, form parser, line reader incl. echo/IAC)
+make -C test/host
+
+# golden behaviour check (needs the hardware): capture a baseline with the
+# old firmware, re-run with the new one, diff the event streams
+python3 tools/log_collector.py --out logs/baseline &     # old firmware
+python3 tools/mock_client.py --host <ip> --persona camera --mode all
+python3 tools/log_collector.py --out logs/candidate &    # new firmware
+python3 tools/mock_client.py --host <ip> --persona camera --mode all
+python3 tools/golden_check.py logs/baseline/micropot-*.jsonl \
+                              logs/candidate/micropot-*.jsonl --ignore sid
+```
+
+## Extending (phase 2)
+
+- **New brand**: add `components/brands/mp_brand_xxx/` with a `behaviors[]`
+  table (+ `www/` pages), add it to `main`'s `REQUIRES` and register it in
+  `select_brand()`.
+- **New protocol**: copy `components/mp_ssh/` as the template — define a
+  behaviour struct in the component's own header, interpret it from brand
+  data, emit events via `mp_evt_*`, register in `main` with one line. Text
+  protocols should build on `mp_linekit`; UDP protocols on
+  `mp_udp_listener` (pseudo-sessions included). No core/header edits needed.
+- **Multi virtual IP**: services already carry `mp_bind_t{vaddr, port}` and
+  personas carry a `bind`; extend the persona table to one entry per IP.
+
+### Known limitations
+
+- `esp_http_server` binds `INADDR_ANY`, so phase 2's multi-IP HTTP will need
+  one server instance per virtual IP (tracked as a design risk).
+- Telnet credentials are matched against a static weak-password table; the
+  honeypot never authenticates real users.
+- SSH is banner-level only: no key exchange, no login capture.
+- Single global log persona: phase 2 moves persona into each event's session.
