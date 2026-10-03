@@ -1,0 +1,362 @@
+/*
+ * Logger runtime: bounded queue, UDP/TCP transport with bounded connect
+ * times, NVS boot counter, and the phase-1 thin wrappers. The generic
+ * event builder lives in mp_evt.c.
+ */
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#include "lwip/inet.h"
+#include "lwip/sockets.h"
+#include "nvs.h"
+
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "mp_log.h"
+#include "mp_util.h"
+
+static const char *TAG = "mp_log";
+
+#define MP_LOG_QUEUE_LEN     24
+#define MP_LOG_LINE_MAX      1024
+#define MP_LOG_PERSONA_MAX   32
+#define MP_LOG_TASK_STACK    6144
+#define MP_LOG_TASK_PRIO     5
+#define MP_LOG_CONNECT_TIMEOUT_MS 3000
+#define MP_LOG_SEND_TIMEOUT_MS    3000
+
+static QueueHandle_t s_queue;
+static int           s_sock = -1;
+static bool          s_use_tcp;
+static bool          s_tcp_connected;
+static struct sockaddr_in s_dest;
+static uint32_t      s_seq;
+static uint32_t      s_boot;
+static char          s_persona[MP_LOG_PERSONA_MAX] = "unknown";
+
+static portMUX_TYPE  s_drop_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t      s_dropped;
+
+/* -------------------------------------------------------------- transport */
+
+static void transport_close(void)
+{
+    if (s_sock >= 0) {
+        close(s_sock);
+        s_sock = -1;
+    }
+    s_tcp_connected = false;
+}
+
+/* connect() with a bounded wait so an unreachable collector cannot stall
+ * the logger task (lwIP's default connect timeout is tens of seconds). */
+static bool tcp_connect(int sock, const struct sockaddr_in *dest)
+{
+    int flags = fcntl(sock, F_GETFL, 0);
+    if (flags < 0) {
+        flags = 0;
+    }
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
+    int r = connect(sock, (const struct sockaddr *)dest, sizeof(*dest));
+    if (r < 0 && errno == EINPROGRESS) {
+        fd_set wfds;
+        FD_ZERO(&wfds);
+        FD_SET(sock, &wfds);
+        struct timeval tv = {
+            .tv_sec = MP_LOG_CONNECT_TIMEOUT_MS / 1000,
+            .tv_usec = (MP_LOG_CONNECT_TIMEOUT_MS % 1000) * 1000,
+        };
+        r = select(sock + 1, NULL, &wfds, NULL, &tv);
+        if (r > 0) {
+            int so_err = 0;
+            socklen_t len = sizeof(so_err);
+            getsockopt(sock, SOL_SOCKET, SO_ERROR, &so_err, &len);
+            r = (so_err == 0) ? 0 : -1;
+            errno = so_err;
+        } else {
+            r = -1;
+        }
+    }
+    fcntl(sock, F_SETFL, flags);
+
+    if (r == 0) {
+        struct timeval stv = {
+            .tv_sec = MP_LOG_SEND_TIMEOUT_MS / 1000,
+            .tv_usec = (MP_LOG_SEND_TIMEOUT_MS % 1000) * 1000,
+        };
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &stv, sizeof(stv));
+        return true;
+    }
+    return false;
+}
+
+static esp_err_t transport_open(void)
+{
+    transport_close();
+    s_sock = socket(AF_INET, s_use_tcp ? SOCK_STREAM : SOCK_DGRAM, 0);
+    if (s_sock < 0) {
+        ESP_LOGE(TAG, "socket() failed errno=%d", errno);
+        return ESP_FAIL;
+    }
+    if (s_use_tcp) {
+        if (tcp_connect(s_sock, &s_dest)) {
+            s_tcp_connected = true;
+        } else {
+            ESP_LOGW(TAG, "TCP connect failed errno=%d (will retry)", errno);
+        }
+    }
+    return ESP_OK;
+}
+
+static void transport_send(const char *buf, size_t len)
+{
+    if (s_sock < 0) {
+        transport_open();
+        if (s_sock < 0) {
+            return;
+        }
+    }
+    if (!s_use_tcp) {
+        sendto(s_sock, buf, len, 0, (struct sockaddr *)&s_dest, sizeof(s_dest));
+        return;
+    }
+    if (!s_tcp_connected) {
+        if (!tcp_connect(s_sock, &s_dest)) {
+            return;
+        }
+        s_tcp_connected = true;
+    }
+    if (send(s_sock, buf, len, 0) < 0) {
+        ESP_LOGW(TAG, "TCP send failed errno=%d, reconnecting", errno);
+        transport_close();
+    }
+}
+
+/* --------------------------------------------------------------- encoding */
+
+static int format_msg(const mp_evt_t *m, uint32_t seq, char *out, size_t n)
+{
+    char sip[16], dip[16];
+    mp_ip4_str(m->src_ip, sip, sizeof(sip));
+    mp_ip4_str(m->dst_ip, dip, sizeof(dip));
+
+    return snprintf(out, n,
+                    "{\"v\":1,\"ts\":%lld,\"boot\":%u,\"seq\":%u,\"sid\":%u,"
+                    "\"evt\":\"%s\",\"proto\":\"%s\",\"persona\":\"%s\","
+                    "\"sip\":\"%s\",\"sport\":%u,\"dip\":\"%s\",\"dport\":%u,"
+                    "\"data\":{%s}}",
+                    (long long)m->ts_ms, (unsigned)s_boot, (unsigned)seq,
+                    (unsigned)m->sid, m->evt, m->proto, s_persona,
+                    sip, (unsigned)m->src_port, dip, (unsigned)m->dst_port,
+                    m->data);
+}
+
+static void ship(const mp_evt_t *m, uint32_t seq, char *line, size_t line_cap)
+{
+    int n = format_msg(m, seq, line, line_cap);
+    if (n < 0 || (size_t)n + 1 >= line_cap) {
+        return; /* cannot happen with MP_LOG_LINE_MAX >> MP_EVT_DATA_MAX */
+    }
+    line[n++] = '\n'; /* newline framing so TCP receivers can split */
+    line[n] = '\0';
+    transport_send(line, (size_t)n);
+    fputs(line, stdout); /* line already carries its newline */
+}
+
+/* ------------------------------------------------------------------ queue */
+
+void mp_evt_send(mp_evt_t *e)
+{
+    if (!s_queue) {
+        return;
+    }
+    e->ts_ms = esp_timer_get_time() / 1000;
+    if (xQueueSend(s_queue, e, 0) != pdTRUE) {
+        portENTER_CRITICAL(&s_drop_lock);
+        s_dropped++;
+        portEXIT_CRITICAL(&s_drop_lock);
+    }
+}
+
+static void logger_task(void *arg)
+{
+    (void)arg;
+    mp_evt_t m;
+    char     line[MP_LOG_LINE_MAX];
+    for (;;) {
+        if (xQueueReceive(s_queue, &m, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        ship(&m, ++s_seq, line, sizeof(line));
+
+        portENTER_CRITICAL(&s_drop_lock);
+        uint32_t dropped = s_dropped;
+        s_dropped = 0;
+        portEXIT_CRITICAL(&s_drop_lock);
+        if (dropped) {
+            mp_evt_t d;
+            mp_evt_begin(&d, NULL, "system", "log.dropped");
+            mp_evt_int(&d, "count", (long long)dropped);
+            d.ts_ms = esp_timer_get_time() / 1000;
+            ship(&d, ++s_seq, line, sizeof(line));
+        }
+    }
+}
+
+/* ---------------------------------------------------------------- startup */
+
+static void read_boot_counter(void)
+{
+    nvs_handle_t h;
+    uint32_t     v = 0;
+    if (nvs_open("mp", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    if (nvs_get_u32(h, "boot", &v) != ESP_OK) {
+        v = 0;
+    }
+    v++;
+    s_boot = v;
+    nvs_set_u32(h, "boot", v);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+esp_err_t mp_log_init(void)
+{
+    read_boot_counter();
+
+    memset(&s_dest, 0, sizeof(s_dest));
+    s_dest.sin_family = AF_INET;
+    s_dest.sin_port = htons(CONFIG_MICROPOT_LOG_PORT);
+    if (inet_pton(AF_INET, CONFIG_MICROPOT_LOG_HOST, &s_dest.sin_addr) != 1) {
+        ESP_LOGE(TAG, "invalid log host '%s'", CONFIG_MICROPOT_LOG_HOST);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+#if CONFIG_MICROPOT_LOG_PROTO_TCP
+    s_use_tcp = true;
+#else
+    s_use_tcp = false;
+#endif
+    /* Socket is opened lazily on first send: the lwIP/tcpip stack must already
+     * be initialised (esp_netif_init) before any socket() call. */
+
+    s_queue = xQueueCreate(MP_LOG_QUEUE_LEN, sizeof(mp_evt_t));
+    if (!s_queue) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (xTaskCreate(logger_task, "mp_log", MP_LOG_TASK_STACK, NULL,
+                    MP_LOG_TASK_PRIO, NULL) != pdPASS) {
+        vQueueDelete(s_queue);
+        s_queue = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG, "logger ready -> %s:%d over %s (boot #%u)",
+             CONFIG_MICROPOT_LOG_HOST, CONFIG_MICROPOT_LOG_PORT,
+             s_use_tcp ? "TCP" : "UDP", (unsigned)s_boot);
+    return ESP_OK;
+}
+
+void mp_log_set_persona(const char *persona_id)
+{
+    if (!persona_id) {
+        return;
+    }
+    snprintf(s_persona, sizeof(s_persona), "%s", persona_id);
+}
+
+/* ----------------------------------------------------- phase-1 wrappers */
+
+void mp_log_net_up(const char *ip, const char *gw, const char *mac)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, NULL, "system", "net.up");
+    mp_evt_str(&e, "ip", ip);
+    mp_evt_str(&e, "gw", gw);
+    mp_evt_str(&e, "mac", mac);
+    mp_evt_send(&e);
+}
+
+void mp_log_service(const char *service, uint16_t port, bool up)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, NULL, "system", "svc");
+    mp_evt_str(&e, "service", service);
+    mp_evt_int(&e, "port", port);
+    mp_evt_bool(&e, "up", up);
+    mp_evt_send(&e);
+}
+
+void mp_log_telnet_connect(const mp_session_t *s)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, s, "telnet", "telnet.connect");
+    mp_evt_str(&e, "service", "telnet");
+    mp_evt_send(&e);
+}
+
+void mp_log_telnet_login(const mp_session_t *s, const char *user, const char *pass,
+                         bool ok, int attempt)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, s, "telnet", "telnet.login_attempt");
+    mp_evt_str(&e, "user", user);
+    mp_evt_str(&e, "pass", pass);
+    mp_evt_str(&e, "result", ok ? "ok" : "fail");
+    mp_evt_int(&e, "attempt", attempt);
+    mp_evt_send(&e);
+}
+
+void mp_log_telnet_command(const mp_session_t *s, const char *cmd)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, s, "telnet", "telnet.command");
+    mp_evt_str(&e, "cmd", cmd);
+    mp_evt_send(&e);
+}
+
+void mp_log_telnet_disconnect(const mp_session_t *s, int64_t dur_ms, const char *reason)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, s, "telnet", "telnet.disconnect");
+    mp_evt_int(&e, "dur_ms", (long long)dur_ms);
+    mp_evt_str(&e, "reason", reason);
+    mp_evt_send(&e);
+}
+
+void mp_log_http_request(const mp_session_t *s, const char *method, const char *uri,
+                         int code)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, s, "http", "http.request");
+    mp_evt_str(&e, "method", method);
+    mp_evt_str(&e, "uri", uri);
+    mp_evt_int(&e, "code", code);
+    mp_evt_send(&e);
+}
+
+void mp_log_http_login(const mp_session_t *s, const char *user, const char *pass, bool ok)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, s, "http", "http.login_attempt");
+    mp_evt_str(&e, "user", user);
+    mp_evt_str(&e, "pass", pass);
+    mp_evt_str(&e, "result", ok ? "ok" : "fail");
+    mp_evt_send(&e);
+}
+
+void mp_log_http_notfound(const mp_session_t *s, const char *uri)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, s, "http", "http.notfound");
+    mp_evt_str(&e, "uri", uri);
+    mp_evt_send(&e);
+}
