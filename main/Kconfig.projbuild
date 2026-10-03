@@ -1,0 +1,94 @@
+menu "MicroPot-C5 honeypot"
+
+    menu "Network"
+        config MICROPOT_WIFI_SSID
+            string "WiFi SSID (isolated lab network)"
+            default "micropot-lab"
+
+        config MICROPOT_WIFI_PASSWORD
+            string "WiFi password"
+            default "micropot123"
+
+        config MICROPOT_USE_STATIC_IP
+            bool "Use a static IPv4 address"
+            default n
+
+        config MICROPOT_STATIC_IP
+            string "Static IPv4 address"
+            depends on MICROPOT_USE_STATIC_IP
+            default "192.168.1.100"
+
+        config MICROPOT_STATIC_NETMASK
+            string "Static netmask"
+            depends on MICROPOT_USE_STATIC_IP
+            default "255.255.255.0"
+
+        config MICROPOT_STATIC_GW
+            string "Static gateway"
+            depends on MICROPOT_USE_STATIC_IP
+            default "192.168.1.1"
+    endmenu
+
+    menu "Honeypot services"
+        config MICROPOT_TELNET_PORT
+            int "Telnet port"
+            range 1 65535
+            default 23
+
+        config MICROPOT_HTTP_PORT
+            int "HTTP port"
+            range 1 65535
+            default 80
+
+        config MICROPOT_SSH_PORT
+            int "SSH port (banner-level honeypot)"
+            range 1 65535
+            default 22
+
+        config MICROPOT_MAX_SESSIONS
+            int "Max concurrent honeypot sessions (global budget)"
+            range 2 32
+            default 8
+            help
+                All TCP listeners share this budget of concurrent connection
+                tasks. Excess connections are accepted and closed at once so
+                a flood cannot exhaust heap and crash the honeypot.
+    endmenu
+
+    menu "Device persona"
+        choice MICROPOT_ACTIVE_PERSONA
+            prompt "Active persona"
+            default MICROPOT_PERSONA_CAMERA
+            help
+                Phase 1 exposes exactly one persona on the single device IP.
+                Phase 2 will select personas per virtual IP at runtime.
+            config MICROPOT_PERSONA_CAMERA
+                bool "HIKVISION-style IP camera"
+            config MICROPOT_PERSONA_ROUTER
+                bool "TP-LINK-style home router"
+            config MICROPOT_PERSONA_PRINTER
+                bool "HP LaserJet-style network printer"
+        endchoice
+    endmenu
+
+    menu "Structured logging"
+        choice MICROPOT_LOG_PROTO
+            prompt "Log transport"
+            default MICROPOT_LOG_PROTO_UDP
+            config MICROPOT_LOG_PROTO_UDP
+                bool "UDP (best effort, low overhead)"
+            config MICROPOT_LOG_PROTO_TCP
+                bool "TCP (connection oriented, auto reconnect)"
+        endchoice
+
+        config MICROPOT_LOG_HOST
+            string "Collector IPv4 address"
+            default "192.168.1.10"
+
+        config MICROPOT_LOG_PORT
+            int "Collector UDP/TCP port"
+            range 1 65535
+            default 9999
+    endmenu
+
+endmenu
