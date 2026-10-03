@@ -1,0 +1,203 @@
+/*
+ * Brand-agnostic Telnet honeypot: login flow, shell loop and Telnet
+ * negotiation are interpreted from the brand's behaviour table. All socket
+ * mechanics come from mp_linekit.
+ */
+#include <stdio.h>
+#include <string.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "lwip/sockets.h"
+
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "mp_core.h"
+#include "mp_linekit.h"
+#include "mp_log.h"
+#include "mp_telnet.h"
+#include "mp_telnet_behavior.h"
+
+static const char *TAG = "mp_telnet";
+
+#define TELNET_IAC 255
+
+#define LOGIN_TIMEOUT_MS   60000
+#define SHELL_TIMEOUT_MS   120000
+#define REBOOT_LINGER_MS   1000
+
+static mp_tcp_listener_cfg_t s_listener;
+
+/* --------------------------------------------------------- session logic */
+
+static bool is_exit_cmd(const char *cmd)
+{
+    return strcmp(cmd, "exit") == 0 || strcmp(cmd, "logout") == 0 ||
+           strcmp(cmd, "quit") == 0;
+}
+
+static bool is_reboot_cmd(const char *cmd)
+{
+    return strcmp(cmd, "reboot") == 0 || strcmp(cmd, "shutdown") == 0 ||
+           strcmp(cmd, "poweroff") == 0;
+}
+
+/** Resolve a command line to a reply, brand hook first then the table.
+ *  NULL when the command is unknown. */
+static const char *find_response(const mp_telnet_behavior_t *b,
+                                 const mp_session_t *sess, const char *cmdline,
+                                 char *out, size_t out_len)
+{
+    if (b->exec) {
+        const char *r = b->exec(sess, cmdline, out, out_len);
+        if (r) {
+            return r;
+        }
+    }
+    const mp_cmd_t *c = mp_cmd_lookup(b->cmds, b->n_cmds, cmdline);
+    return c ? c->response : NULL;
+}
+
+static void telnet_conn(int sock, const mp_session_t *sess, void *arg)
+{
+    mp_service_t *svc = (mp_service_t *)arg;
+    const mp_telnet_behavior_t *b =
+        svc->brand ? mp_brand_behavior(svc->brand, "telnet") : NULL;
+    if (!b) {
+        return;
+    }
+
+    mp_log_telnet_connect(sess);
+
+    /* IAC WILL ECHO, IAC WILL SUPPRESS-GO-AHEAD */
+    const unsigned char init[] = { TELNET_IAC, 251, 1, TELNET_IAC, 251, 3 };
+    mp_send_all(sock, init, sizeof(init));
+
+    if (b->banner) {
+        mp_send_str(sock, b->banner);
+        mp_send_str(sock, "\r\n");
+    }
+
+    const char *reason = "auth_failed";
+    char        user[64] = { 0 };
+    char        pass[64] = { 0 };
+    bool        authed = false;
+    int         attempt = 0;
+    int         max_attempts = b->max_retries ? b->max_retries : 3;
+
+    while (attempt < max_attempts) {
+        /* busybox behaviour: username is echoed, the password is not */
+        if (mp_send_str(sock, b->login_prompt) < 0) {
+            reason = "send_error";
+            goto done;
+        }
+        int n = mp_line_read(sock, user, sizeof(user), LOGIN_TIMEOUT_MS,
+                             true, MP_LINE_ECHO_ON);
+        if (n < 0) {
+            reason = (n == -2) ? "timeout" : "closed";
+            goto done;
+        }
+        if (mp_send_str(sock, b->password_prompt) < 0) {
+            reason = "send_error";
+            goto done;
+        }
+        n = mp_line_read(sock, pass, sizeof(pass), LOGIN_TIMEOUT_MS,
+                         true, MP_LINE_ECHO_OFF);
+        if (n < 0) {
+            reason = (n == -2) ? "timeout" : "closed";
+            goto done;
+        }
+        mp_send_str(sock, "\r\n");
+
+        attempt++;
+        authed = mp_creds_match(b->creds, b->n_creds, user, pass);
+        mp_log_telnet_login(sess, user, pass, authed, attempt);
+        if (authed) {
+            break;
+        }
+        mp_send_str(sock, b->login_failed);
+        mp_send_str(sock, "\r\n");
+    }
+
+    if (!authed) {
+        reason = "auth_failed";
+        goto done;
+    }
+
+    reason = "closed";
+    char cmd[128];
+    for (;;) {
+        if (mp_send_str(sock, b->shell_prompt) < 0) {
+            reason = "send_error";
+            break;
+        }
+        int n = mp_line_read(sock, cmd, sizeof(cmd), SHELL_TIMEOUT_MS,
+                             true, MP_LINE_ECHO_ON);
+        if (n < 0) {
+            reason = (n == -2) ? "timeout" : "closed";
+            break;
+        }
+        if (n == 0) {
+            continue;
+        }
+        mp_log_telnet_command(sess, cmd);
+        if (is_exit_cmd(cmd)) {
+            reason = "logout";
+            break;
+        }
+        char out[512];
+        const char *resp = find_response(b, sess, cmd, out, sizeof(out));
+        bool known = resp != NULL;
+        if (!known) {
+            snprintf(out, sizeof(out), "sh: %s: not found", cmd);
+            resp = out;
+        }
+        if (mp_send_str(sock, resp) < 0 || mp_send_str(sock, "\r\n") < 0) {
+            reason = "send_error";
+            break;
+        }
+        if (known && is_reboot_cmd(cmd)) {
+            /* sell the reboot: linger briefly, then drop the session */
+            vTaskDelay(pdMS_TO_TICKS(REBOOT_LINGER_MS));
+            reason = "reboot";
+            break;
+        }
+    }
+
+done:
+    {
+        int64_t dur = (esp_timer_get_time() - sess->start_us) / 1000;
+        mp_log_telnet_disconnect(sess, dur, reason);
+    }
+}
+
+/* -------------------------------------------------------------- lifecycle */
+
+static esp_err_t telnet_start(mp_service_t *svc)
+{
+    if (!svc->brand || !mp_brand_behavior(svc->brand, "telnet")) {
+        ESP_LOGE(TAG, "brand '%s' has no telnet behaviour",
+                 svc->brand ? svc->brand->meta->id : "(null)");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    memset(&s_listener, 0, sizeof(s_listener));
+    s_listener.vaddr = svc->bind.vaddr;
+    s_listener.port = svc->bind.port;
+    s_listener.name = "telnet";
+    s_listener.handler = telnet_conn;
+    s_listener.arg = svc;
+    return mp_tcp_listener_start(&s_listener);
+}
+
+static const mp_service_ops_t s_ops = {
+    .name = "telnet",
+    .proto = MP_PROTO_TCP,
+    .default_port = 23,
+    .start = telnet_start,
+    .stop = NULL,
+};
+
+const mp_service_ops_t *mp_telnet_get_ops(void)
+{
+    return &s_ops;
+}
