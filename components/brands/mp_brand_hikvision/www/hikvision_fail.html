@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Network Camera</title>
+<style>
+body{background:#1b1b2f;color:#eaeaea;font-family:Arial,Helvetica,sans-serif;text-align:center;margin-top:70px}
+.box{display:inline-block;background:#252545;padding:28px 44px;border-radius:8px;box-shadow:0 4px 18px #0008}
+h2{margin:0;color:#e94560;letter-spacing:3px}
+h3{margin:4px 0 22px;font-weight:400;color:#9aa}
+input{display:block;margin:10px auto;padding:9px;width:210px;border:1px solid #444;background:#1b1b2f;color:#eee;border-radius:4px}
+button{padding:9px 34px;background:#e94560;color:#fff;border:0;border-radius:4px;cursor:pointer}
+.err{color:#e94560;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="box">
+<h2>HIKVISION</h2>
+<h3>Network Camera</h3>
+<form method="POST" action="/login">
+<input name="username" placeholder="User Name">
+<input name="password" type="password" placeholder="Password">
+<button type="submit">Login</button>
+</form>
+<div class="err">Invalid user name or password.</div>
+</div>
+</body>
+</html>
