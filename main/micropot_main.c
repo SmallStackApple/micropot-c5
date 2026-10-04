@@ -15,6 +15,7 @@
 
 #include "mp_core.h"
 #include "mp_brand_hikvision.h"
+#include "mp_ftpd.h"
 #include "mp_brand_linux419.h"
 #include "mp_brand_printer.h"
 #include "mp_brand_router.h"
@@ -120,6 +121,7 @@ void app_main(void)
     /* Real SSH (wolfSSH) for the Linux persona; vendor brands keep the
      * banner-level mp_ssh above. */
     mp_registry_register(mp_sshd_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
+    mp_registry_register(mp_ftpd_get_ops(), mp_bind_any(CONFIG_MICROPOT_FTP_PORT));
 
     char ip[16] = "0.0.0.0";
     char gw[16] = "0.0.0.0";

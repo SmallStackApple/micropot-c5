@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "mp_brand_linux419.h"
+#include "mp_ftpd_behavior.h"
 #include "mp_http_behavior.h"
 #include "mp_httpd_behavior.h"
 #include "mp_linuxfs.h"
@@ -323,12 +324,23 @@ static const mp_sshd_behavior_t s_sshd = {
     .handshake_timeout_ms = 30000,
 };
 
+/* vsftpd 3.0.3 (CVE-2021-30047 / CVE-2021-3618 are version-attributable). */
+static const mp_ftpd_behavior_t s_ftpd = {
+    .banner = "220 (vsFTPd 3.0.3)\r\n",
+    .creds = s_creds,
+    .n_creds = sizeof(s_creds) / sizeof(s_creds[0]),
+    .root = "/home/admin",
+    .data_port = 50000,
+    .hostname = "linux",
+};
+
 static const mp_brand_behavior_entry_t s_behaviors[] = {
     { "telnet",   &s_telnet },
     { "http",     &s_http   },
     { "httpd",    &s_httpd  },
     { "ssh",      &s_ssh    },
     { "sshd",     &s_sshd   },
+    { "ftpd",     &s_ftpd   },
     /* Drives the mp_stack419 engine when this persona runs on it: the
      * kernel personality (TTL, MSS, window, option layout, ISN, timers)
      * is data, not code. */

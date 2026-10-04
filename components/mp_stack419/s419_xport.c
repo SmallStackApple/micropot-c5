@@ -73,7 +73,7 @@ static void conn_task(void *arg)
 }
 
 /* Called in the tcpip thread once the three-way handshake completes. */
-void s419_established(s419_tcb *tcb)
+bool s419_established(s419_tcb *tcb)
 {
     tcb->app_attached = true;
     tcb->rx_sem = xSemaphoreCreateCounting(S419_RX_CAP, 0);
@@ -85,8 +85,9 @@ void s419_established(s419_tcb *tcb)
         ESP_LOGE(TAG, "cannot accept %s: out of memory", tcb->listener->name);
         free(conn);
         free(a);
+        tcb->conn = NULL;
         s419_tcp_abort(tcb);
-        return;
+        return false;
     }
 
     conn->ops = &s_conn_ops;
@@ -112,8 +113,11 @@ void s419_established(s419_tcb *tcb)
         ESP_LOGE(TAG, "cannot spawn %s task", tcb->listener->name);
         free(conn);
         free(a);
+        tcb->conn = NULL;
         s419_tcp_abort(tcb);
+        return false;
     }
+    return true;
 }
 
 /* --------------------------------------------------------------- listen */

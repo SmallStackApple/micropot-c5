@@ -448,6 +448,9 @@ void s419_tcp_input(s419_tcb *tcb, const uint8_t *th, size_t tcp_len,
 
     /* RST is terminal in every state (tcp_reset / tcp_rcv_established). */
     if (flags & S419_RST) {
+        if (tcb->state == S419_S_SYN_RECV) {
+            s419_synrecv_dec();
+        }
         connection_dead(tcb);
         try_free(tcb);
         return;
@@ -495,7 +498,9 @@ void s419_tcp_input(s419_tcb *tcb, const uint8_t *th, size_t tcp_len,
             try_free(tcb);
             return;
         }
-        s419_established(tcb);
+        if (!s419_established(tcb)) {
+            return; /* TCB was aborted and freed */
+        }
         /* ACK may carry data (simultaneous open is out of scope) */
         if (plen == 0) {
             return;

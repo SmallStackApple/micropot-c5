@@ -76,6 +76,9 @@ void mp_log_http_request(const mp_session_t *s, const char *method, const char *
 void mp_log_http_login(const mp_session_t *s, const char *user, const char *pass, bool ok);
 void mp_log_http_notfound(const mp_session_t *s, const char *uri);
 
+void mp_log_ftp_login(const mp_session_t *s, const char *user, const char *pass,
+                      bool ok);
+
 #ifdef __cplusplus
 }
 #endif

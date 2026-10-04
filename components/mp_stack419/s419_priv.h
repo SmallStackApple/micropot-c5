@@ -160,7 +160,9 @@ void s419_app_shutdown(s419_tcb *tcb);
 void s419_app_release(s419_tcb *tcb);
 
 /* ---- s419_xport.c ---- */
-void s419_established(s419_tcb *tcb);         /* tcpip thread */
+/** Spawn the application task for a completed handshake. Returns false if
+ *  the TCB was aborted (and freed) because the task could not be created. */
+bool s419_established(s419_tcb *tcb);         /* tcpip thread */
 bool s419_core_ready(void);
 
 static inline uint16_t s419_rd16(const uint8_t *p)
