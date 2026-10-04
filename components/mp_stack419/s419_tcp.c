@@ -383,6 +383,16 @@ void s419_tcp_new_syn(const s419_listener_t *lst,
         return;
     }
 
+    {
+        static bool first = true;
+        if (first) {
+            first = false;
+            ESP_LOGW(TAG, "first SYN -> listener %s:%u (ready=%d our_ip=%08lx)",
+                     lst->name, lst->port, (int)s419_core_ready(),
+                     (unsigned long)s419_our_ip());
+        }
+    }
+
     s419_tcb *tcb = s419_tcb_find(lip, rip, lport, rport);
     if (tcb == NULL && s419_synrecv_count() >= S419_SYNRECV_CAP) {
         /* backlog pressure: drop new SYNs and report the flood instead of

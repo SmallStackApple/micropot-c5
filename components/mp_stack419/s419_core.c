@@ -72,9 +72,10 @@ uint16_t s419_icmp_ipid(void)
 
 void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_host)
 {
+    static int64_t s_last_err_ms;
     struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_RAM);
     if (!p) {
-        ESP_LOGD(TAG, "tx: pbuf alloc failed (%u)", (unsigned)len);
+        ESP_LOGW(TAG, "tx: pbuf alloc failed (%u)", (unsigned)len);
         return;
     }
     pbuf_take(p, pkt, (u16_t)len);
@@ -83,7 +84,14 @@ void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_host)
              (dst_host >> 8) & 0xff, dst_host & 0xff);
     err_t err = raw_sendto(s_pcb_tx, p, &dst); /* HDRINCL: sent verbatim */
     if (err != ERR_OK) {
-        ESP_LOGD(TAG, "tx: raw_sendto -> %d", err);
+        int64_t now = s419_now_ms();
+        if (now - s_last_err_ms > 1000) { /* throttle under flood */
+            s_last_err_ms = now;
+            ESP_LOGW(TAG, "tx: raw_sendto -> %d (dst %u.%u.%u.%u, len %u, pcb %p)",
+                     err, (dst_host >> 24) & 0xff, (dst_host >> 16) & 0xff,
+                     (dst_host >> 8) & 0xff, dst_host & 0xff,
+                     (unsigned)len, (void *)s_pcb_tx);
+        }
     }
     pbuf_free(p);
 }
@@ -272,6 +280,15 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 
     if (lport >= S419_EPHEMERAL_MIN) {
         return 0; /* lwIP's own outbound flows (log collector) */
+    }
+
+    {
+        static bool first_rx;
+        if (!first_rx) {
+            first_rx = true;
+            ESP_LOGW(TAG, "first inbound TCP for us: dport=%u flags=0x%02x",
+                     lport, flags);
+        }
     }
 
     s419_tcb *tcb = s419_tcb_find(ip_dst, ip_src, lport, rport);
