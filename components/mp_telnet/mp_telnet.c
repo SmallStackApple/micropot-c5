@@ -213,6 +213,7 @@ static esp_err_t telnet_start(mp_service_t *svc)
     s_listener.name = "telnet";
     s_listener.handler = telnet_conn;
     s_listener.arg = svc;
+    s_listener.stack_size = 8192; /* mp_shell uses ~1.6 KB output buffers */
     return mp_xport_listen(&s_listener);
 }
 
