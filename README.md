@@ -17,22 +17,23 @@ new protocol or a new brand is a pure add-on — no edits to shared code.
   persona (instance)   |  service registry              |
        +-------------> |  brand registry (open, keyed   |
                        |    by protocol name)           |
-                       |  TCP listener + session budget |
-                       |  UDP listener (phase-2 ready)  |
+                       |  mp_xport: transport backends  |
+                       |  + global session budget       |
                        +-------------------------------+
                               ^              ^
              brand-agnostic   |              |   brand modules (data + hooks)
        +----------------------+              +---------------------+
-       |              |       |                                    |
-  mp_telnet      mp_http   mp_ssh          mp_brand_hikvision / _router / _printer
-  (login+shell   (mgmt     (banner          behaviours[] = { "telnet", ..., "ssh" }
-   interpreter)   pages)    harvester)
-       |              |       |
-       +------+-------+-------+
-              v
+       |       |       |      |       |                           |
+  mp_telnet mp_http mp_ssh    |       |      mp_brand_hikvision / _router / _printer
+  mp_ftpd   mp_httpd mp_sshd  |       |      mp_brand_linux419 (+fs, +host keys)
+       |       |       |    mp_stack419: Linux 4.19 wire behaviour
+       |       |       |    (raw-PCB TCP/IP: ISN/options/resets/ICMP
+       +-------+-------+      per v4.19 sources; "s419" xport backend)
+               v
         mp_log: generic event bus (mp_evt_*) --UDP/TCP--> log_collector.py
 
        mp_linekit: line/echo/IAC toolkit shared by text protocols
+       mp_linuxfs/mp_linuxsh: fake filesystem + bash-flavoured shell
 ```
 
 Two invariants keep the system extensible:
@@ -42,22 +43,31 @@ Two invariants keep the system extensible:
   an open `{"proto", behavior}` table and services look theirs up with
   `mp_brand_behavior(brand, "telnet")`.
 - **The event bus is protocol-agnostic.** Services emit events via
-  `mp_evt_begin/str/int/bool/send`; `mp_log` knows no event names. The SSH
-  service was added as proof: one new component, one registration line, zero
-  core changes.
+  `mp_evt_begin/str/int/bool/send`; `mp_log` knows no event names.
+
+Services never touch sockets: they run on `mp_xport` connections. The default
+backend is lwIP (the vendor brands); the `linux-419` persona switches to the
+`s419` backend, where every packet is crafted by the stack419 engine instead
+of lwIP's TCP (see below).
 
 ### Component layout
 
 | Path | Responsibility |
 |------|----------------|
-| `components/mp_core` | service registry, TCP/UDP listeners, global session budget, persona & brand registries, shared utils |
+| `components/mp_core` | service registry, `mp_xport` transport abstraction + lwIP backend, global session budget, persona & brand registries |
+| `components/mp_stack419` | Linux 4.19 TCP/IP behaviour engine: raw-PCB intercept, ISN per `secure_tcp_sequence_number`, SYN-ACK options per `tcp_options_write`, closed-port resets, ICMP, mini TCP session machine, `s419` xport backend |
 | `components/mp_log` | generic event bus: builder (`mp_evt`), FreeRTOS queue, UDP/TCP transport |
 | `components/mp_net` | WiFi STA (+ reconnect backoff), optional static IP, MAC spoofing |
 | `components/mp_linekit` | line reader (echo/backspace/IAC), send helpers, canned-command lookup |
-| `components/mp_telnet` | Telnet honeypot interpreter |
-| `components/mp_http` | HTTP management-page honeypot (`esp_http_server`) |
+| `components/mp_linuxfs` | fake filesystem primitives (static tree, lookup, path normalisation) |
+| `components/mp_linuxsh` | bash-flavoured shell: real cwd, fs commands, live ifconfig/ip/route, wget/curl URL harvest |
+| `components/mp_telnet` | Telnet honeypot interpreter (canned or shell-hook driven) |
+| `components/mp_http` | HTTP management-page honeypot (`esp_http_server`, lwIP brands) |
+| `components/mp_httpd` | Apache/2.4.38-style HTTP server on mp_xport |
 | `components/mp_ssh` | banner-level SSH honeypot (client-banner harvester) |
-| `components/brands/mp_brand_*` | HIKVISION camera / TP-LINK router / HP printer behaviour tables |
+| `components/mp_sshd` | real SSH-2.0 transport (wolfSSH), OpenSSH 7.9p1 identity, password capture + shell |
+| `components/mp_ftpd` | vsftpd 3.0.3-style FTP honeypot, read-only fs, PASV pool |
+| `components/brands/mp_brand_*` | HIKVISION camera / TP-LINK router / HP printer / Linux 4.19 server behaviour tables (+ file tree, SSH host keys) |
 | `main` | Kconfig + boot sequence |
 | `tools` | PC-side collector, mock attacker, golden regression check |
 | `test/host` | host unit tests for the pure sources (no hardware needed) |
@@ -180,26 +190,65 @@ byte must have bit 0 clear, i.e. an even first octet). Other examples:
 
 ## Linux 4.19 simulation persona
 
-A fourth persona emulates a plain x86_64 Linux 4.19 server:
+The `linux-419` persona (brand `linux_419`, hostname `linux`) simulates a
+plain, distro-neutral x86_64 Linux 4.19 server end to end — wire, services
+and shell. Select it in `menuconfig` → *MicroPot-C5 honeypot* →
+*Device persona* → *Generic Linux 4.19 server*.
 
-- brand `linux_419`, persona `linux-419` (hostname `linux`), services
-  `telnet` + `http` + `ssh`.
-- SSH advertises `SSH-2.0-OpenSSH_7.9p1`; HTTP advertises
-  `Server: Apache/2.4.38`; the root shell reports
-  `Linux linux 4.19.0 #1 SMP x86_64 GNU/Linux` and generates live
-  `ifconfig` / `ip` / `route` output from the device's real IP and MAC.
-- Select it in `menuconfig` → *MicroPot-C5 honeypot* → *Device persona* →
-  *Generic Linux 4.19 server*, or set `CONFIG_MICROPOT_PERSONA_LINUX419=y`.
+**TCP/IP wire behaviour (`mp_stack419`).** lwIP raw PCBs intercept inbound
+TCP/UDP/ICMP ahead of lwIP's own stack; every reply is built complete (IP
+header included) and emitted verbatim through an IP_HDRINCL PCB, modelled on
+the v4.19 kernel sources (`~/linux`, tag `v4.19`):
 
-`nmap -O` OS detection is approximated, not spoofed: `sdkconfig.defaults`
-tunes the lwIP values that influence the fingerprint
-(`CONFIG_LWIP_IP_DEFAULT_TTL=64`, `CONFIG_LWIP_TCP_MSS=1460`,
-`CONFIG_LWIP_TCP_WND_DEFAULT=64240`, `CONFIG_LWIP_TCP_MSL=60000`) to match the
-`Fingerprint Linux 4.19` record in `nmap-os-db`. TCP option order, timestamps,
-ECN and window scaling are not exposed by ESP-IDF's lwIP, so an exact match is
-not guaranteed. Run `tools/fingerprint_check.sh <device-ip>` to see what nmap
-reports.
+- ISN per `secure_tcp_sequence_number` (SipHash-2-4 over the 4-tuple +
+  64 ns clock), SYN-ACK option layout per `tcp_options_write`
+  (`MSS|NNS|NW` → nmap `M5B4NNSNW6`), LISTEN-state probe handling per
+  `tcp_rcv_state_process` (nmap T2/T3 drop, T4 RST), closed-port resets per
+  `tcp_v4_send_reset` (T5–T7), ICMP echo / port-unreachable per `icmp.c`
+  (IE/U1) — targeting the generic `Fingerprint Linux 4.19` nmap-os-db
+  record (no distro). Timestamps disabled (`TS=U`), TCP IP-ID 0,
+  window 64240 (`FAF0`), TTL 64, DF set.
+- A mini TCP session machine (handshake, seq/ack, delayed ACK, RTO
+  retransmit, FIN/RST, TIME_WAIT) carries real sessions, so services run
+  unchanged on top through the `s419` mp_xport backend. lwIP keeps ARP and
+  the honeypot's own outbound log traffic.
 
+**Services.** All four run on the 4.19 stack:
+
+- **telnet** → bash-flavoured shell (`mp_linuxsh`) over the fake filesystem:
+  real cwd, `ls/cd/cat/grep` from the tree, live `ifconfig/ip/route` from
+  the device's actual IP/MAC, `ps/df/free/ss/netstat` canned, `wget/curl`
+  harvest payload URLs as `telnet.download` events.
+- **httpd** → Apache/2.4.38 style (`~/httpd` tag `2.4.38`): upstream default
+  *It works!* index, exact error documents and `<address>` signature,
+  keep-alive, 400 on missing Host, 405 on POST/TRACE to static content.
+- **sshd** → real SSH-2.0 transport (wolfSSH): `SSH-2.0-OpenSSH_7.9p1`,
+  KEXINIT trimmed from `V_7_9_P1:myproposal.h`, stable RSA-2048 + ECDSA
+  P-256 host keys, password attempts as `ssh.auth_attempt`; valid creds get
+  the same shell over the encrypted channel (`ssh.command` events).
+- **ftpd** → vsftpd 3.0.3 (`~/vsftpd-3.0.3`): `220 (vsFTPd 3.0.3)`, FEAT/
+  SYST/HELP texts from source, read-only RETR/LIST from the fake fs, PASV
+  data channels, `ftp.login_attempt` / `ftp.download` events, 421 past
+  `max_clients` (CVE-2021-30047's connection-limit signature, no crash).
+
+**Fake filesystem** (`linux419_fs.c`): distro-neutral tree — `/etc/passwd`,
+`/etc/shadow` (root-readable hashes), `/etc/ssh/sshd_config`, `/proc/*`,
+`/var/log/auth.log` with plausible brute-force traces, `/root/.bash_history`.
+The reserved SPIFFS partition stays free for a phase-2 writable overlay
+(attacker uploads, persistence).
+
+### Validation (real pentest tools, from the LAN)
+
+```sh
+ip=<device-ip>
+nmap -O --osscan-guess $ip          # expect: Linux 4.19 guesses
+nmap -sV -p21,22,23,80 $ip          # vsftpd 3.0.3 / OpenSSH 7.9p1 / Apache 2.4.38
+nmap --script ssh2-enum-algos -p22 $ip
+ssh root@$ip                        # password: toor (see brand creds)
+hydra -l root -P wordlist.txt ssh://$ip
+lftp -u root,toor $ip -e "ls /etc; get /etc/passwd; bye"
+curl -i http://$ip/nonexistent      # Apache-style 404 + Server header
+```
 ## Testing & regression
 
 ```sh
@@ -235,5 +284,12 @@ python3 tools/golden_check.py logs/baseline/micropot-*.jsonl \
   one server instance per virtual IP (tracked as a design risk).
 - Telnet credentials are matched against a static weak-password table; the
   honeypot never authenticates real users.
-- SSH is banner-level only: no key exchange, no login capture.
+- wolfSSH implements no chacha20-poly1305/umac/curve25519@libssh.org, so the
+  sshd KEXINIT is 7.9p1's lists minus those entries (indistinguishable from
+  a hardened sshd_config, but `ssh2-enum-algos` shows the trimmed lists).
+- The persona clock is a fixed base plus uptime (HTTP `Date`, shell `date`):
+  the box simply looks like its RTC drifted.
+- The fake filesystem is read-only; uploads/uploads-via-shell are faked
+  (phase 2: SPIFFS writable overlay). FTP PASV uses a fixed 4-port pool
+  (40021–40024) instead of kernel ephemeral ports.
 - Single global log persona: phase 2 moves persona into each event's session.
