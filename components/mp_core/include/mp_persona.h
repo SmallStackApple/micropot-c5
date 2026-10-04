@@ -26,6 +26,10 @@ typedef struct {
     const char *services[MP_MAX_SERVICES];
     uint8_t     n_services;
     const char *hostname;
+    /** Transport backend for this persona: NULL/"lwip" = lwIP sockets,
+     *  "s419" = the Linux 4.19 TCP/IP engine. The brand must publish a
+     *  "stack419" behaviour when this is set. */
+    const char *transport;
 } mp_persona_t;
 
 /** Currently selected persona (chosen by Kconfig). */

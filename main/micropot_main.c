@@ -4,6 +4,8 @@
  * Single device IP hosting two brand-driven honeypot services (Telnet + HTTP)
  * with structured JSON event logging to a PC collector.
  */
+#include <string.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -20,6 +22,7 @@
 #include "mp_log.h"
 #include "mp_net.h"
 #include "mp_ssh.h"
+#include "mp_stack419.h"
 #include "mp_telnet.h"
 
 static const char *TAG = "micropot";
@@ -88,6 +91,20 @@ void app_main(void)
     /* The network stack (esp_netif/lwIP) must be up before anything creates a
      * socket, which is why mp_net_init() precedes mp_log_init(). */
     ESP_ERROR_CHECK(mp_net_init(brand->meta->mac_oui, persona->hostname));
+
+    /* Pick the transport: the linux-419 persona carries its own 4.19
+     * TCP/IP engine, every other brand keeps the lwIP socket path. */
+    if (persona->transport && strcmp(persona->transport, "s419") == 0) {
+        const mp_s419_params_t *par = mp_brand_behavior(brand, "stack419");
+        if (!par || mp_stack419_init(par) != ESP_OK) {
+            ESP_LOGE(TAG, "persona '%s' wants stack419 but brand '%s' has no "
+                          "usable stack419 behaviour", persona->id,
+                     brand->meta->id);
+            fatal_restart("stack419 unavailable");
+        }
+        mp_xport_use(&mp_xport_s419);
+        ESP_LOGI(TAG, "transport: %s", mp_xport_backend_name());
+    }
 
     ESP_ERROR_CHECK(mp_log_init());
     mp_xport_set_overload_hook(on_session_overload);

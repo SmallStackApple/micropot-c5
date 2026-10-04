@@ -14,6 +14,7 @@
 #include "mp_http_behavior.h"
 #include "mp_net.h"
 #include "mp_ssh_behavior.h"
+#include "mp_stack419.h"
 #include "mp_telnet_behavior.h"
 
 /* Embedded page resources (see EMBED_TXTFILES in CMakeLists.txt). */
@@ -278,9 +279,11 @@ static const mp_ssh_behavior_t s_ssh = {
 };
 
 static const mp_brand_behavior_entry_t s_behaviors[] = {
-    { "telnet", &s_telnet },
-    { "http",   &s_http   },
-    { "ssh",    &s_ssh    },
+    { "telnet",   &s_telnet },
+    { "http",     &s_http   },
+    { "ssh",      &s_ssh    },
+    /* TCP/IP personality: generic Linux 4.19 fingerprint record. */
+    { "stack419", &mp_s419_params_linux419 },
     { NULL, NULL },
 };
 
