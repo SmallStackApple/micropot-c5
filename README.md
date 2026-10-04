@@ -50,19 +50,13 @@ Two invariants keep the system extensible:
 
 | Path | Responsibility |
 |------|----------------|
-| `components/mp_core` | service registry, transport abstraction (`mp_xport`), global session budget, persona & brand registries, shared utils |
+| `components/mp_core` | service registry, TCP/UDP listeners, global session budget, persona & brand registries, shared utils |
 | `components/mp_log` | generic event bus: builder (`mp_evt`), FreeRTOS queue, UDP/TCP transport |
-| `components/mp_net` | WiFi STA (+ reconnect backoff), optional static IP, MAC spoofing, SNTP clock |
-| `components/mp_linekit` | line reader (echo/backspace/IAC), send helpers, canned-command lookup, over `mp_xport` |
+| `components/mp_net` | WiFi STA (+ reconnect backoff), optional static IP, MAC spoofing |
+| `components/mp_linekit` | line reader (echo/backspace/IAC), send helpers, canned-command lookup |
 | `components/mp_telnet` | Telnet honeypot interpreter |
 | `components/mp_http` | HTTP management-page honeypot (`esp_http_server`) |
-| `components/mp_httpd` | Apache-2.4-style HTTP server on `mp_xport` (Linux persona) |
 | `components/mp_ssh` | banner-level SSH honeypot (client-banner harvester) |
-| `components/mp_sshd` | real SSH via wolfSSH: KEX + password capture + shell |
-| `components/mp_ftpd` | vsftpd-3.0.3-style FTP honeypot |
-| `components/mp_stack419` | Linux 4.19 TCP/IP behaviour engine (raw PCBs + mini TCP) |
-| `components/mp_linuxfs` | fake read-only filesystem (generic Linux 4.19 tree) |
-| `components/mp_shell` | bash-style shell over `mp_linuxfs` + live `mp_net` facts |
 | `components/brands/mp_brand_*` | HIKVISION camera / TP-LINK router / HP printer behaviour tables |
 | `main` | Kconfig + boot sequence |
 | `tools` | PC-side collector, mock attacker, golden regression check |
@@ -82,18 +76,9 @@ source /home/xiaoboluo/.espressif/tools/activate_idf_v6.1.sh
 source /home/xiaoboluo/.espressif/tools/activate_idf_v6.1.sh
 cd micropot-c5
 idf.py set-target esp32c5     # first time only
-tools/setup_deps.sh           # fetch wolfSSL/wolfSSH + apply the C5 patch
 idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
-
-`tools/setup_deps.sh` runs the component manager and then applies
-`tools/patches/wolfssl-esp32c5.py`. wolfSSL 5.8.2 has no ESP32-C5 port
-(target watchdog, a C23 keyword clash in its memory-map debug module, and
-the hardware entropy hook), so the patch is required after any clean
-`managed_components/` fetch. wolfSSH also advertises its own KEX/cipher
-algorithm lists, which do not exactly match OpenSSH 7.9p1's (see
-limitations).
 
 ## Run it
 
@@ -195,69 +180,31 @@ byte must have bit 0 clear, i.e. an even first octet). Other examples:
 
 ## Linux 4.19 simulation persona
 
-The fourth persona (`linux-419`, hostname `linux`) emulates a plain,
-distro-neutral x86_64 Linux 4.19 server. It does not use lwIP for its
-services: a dedicated engine, **mp_stack419**, owns the wire personality.
+A fourth persona emulates a plain x86_64 Linux 4.19 server:
 
-### TCP/IP behaviour (mp_stack419)
+- brand `linux_419`, persona `linux-419` (hostname `linux`), services
+  `telnet` + `http` + `ssh`.
+- SSH advertises `SSH-2.0-OpenSSH_7.9p1`; HTTP advertises
+  `Server: Apache/2.4.38`; the root shell reports
+  `Linux linux 4.19.0 #1 SMP x86_64 GNU/Linux` and generates live
+  `ifconfig` / `ip` / `route` output from the device's real IP and MAC.
+- Select it in `menuconfig` → *MicroPot-C5 honeypot* → *Device persona* →
+  *Generic Linux 4.19 server*, or set `CONFIG_MICROPOT_PERSONA_LINUX419=y`.
 
-Inbound IPv4 is intercepted with lwIP raw PCBs *before* lwIP's own TCP/UDP
-handling, and answered with packets crafted to match the nmap-os-db
-`Fingerprint Linux 4.19` generic record:
-
-- ISN generation is Linux 4.19's `secure_tcp_sequence_number()`
-  (SipHash-2-4 over the 4-tuple with a per-boot secret, plus the 64 ns
-  clock), verified against the canonical SipHash vectors;
-- SYN-ACK options reproduce `tcp_options_write()` byte for byte
-  (`MSS | NOP NOP SACK_PERM | NOP WSCALE` = nmap `OPS=M5B4NNSNW6`),
-  window `0xFAF0`, TTL 64, DF, IP ID 0 (`TI=Z / CI=Z`), timestamps off
-  (`TS=U`), ECN served when requested (`CC=Y`);
-- probe semantics follow `tcp_input.c` / `tcp_ipv4.c`: NULL and SYN+FIN to
-  an open port are dropped (T2/T3 `R=N`), a bare ACK gets a reset (T4),
-  closed ports reset with window 0 (T5/T6/T7), UDP to a closed port yields
-  an ICMP port-unreachable (U1) and ICMP echo is answered (IE);
-- real sessions run through a mini TCP state machine (handshake, delayed
-  ACKs, RFC 6298 RTO with Karn's rule, fast retransmit at 3 dup-ACKs,
-  FIN states, 2*MSL TIME_WAIT).
-
-Everything is parameterised by `mp_s419_params_linux419`; the engine itself
-is brand-agnostic.
-
-### Services
-
-All run through the `s419` transport backend, so the TCP fingerprint stays
-Linux while the application layer stays plausible:
-
-| Port | Service | Notes |
-|------|---------|-------|
-| 23 | `telnet` | login + bash-style shell |
-| 80 | `httpd` | Apache/2.4.38 headers, keep-alive, RFC-style error pages, Basic auth |
-| 22 | `sshd` | real SSH via wolfSSH: KEX, password capture, then the shell |
-| 21 | `ftpd` | `220 (vsFTPd 3.0.3)`, credential capture, passive listing |
-
-The shell (`mp_shell`) reads a fake filesystem (`mp_linuxfs`) with a
-distro-neutral 4.19 tree (`/etc/passwd`, `sshd_config`, `/proc`, a web root,
-plus `.bash_history` and an `auth.log`), and generates `ifconfig` / `ip` /
-`route` / `date` from live device state, so the shell story agrees with the
-wire.
-
-Select the persona in `menuconfig` → *MicroPot-C5 honeypot* → *Device
-persona* → *Generic Linux 4.19 server* (`CONFIG_MICROPOT_PERSONA_LINUX419=y`),
-or validate from a lab host with `tools/fingerprint_check.sh <device-ip>`.
+`nmap -O` OS detection is approximated, not spoofed: `sdkconfig.defaults`
+tunes the lwIP values that influence the fingerprint
+(`CONFIG_LWIP_IP_DEFAULT_TTL=64`, `CONFIG_LWIP_TCP_MSS=1460`,
+`CONFIG_LWIP_TCP_WND_DEFAULT=64240`, `CONFIG_LWIP_TCP_MSL=60000`) to match the
+`Fingerprint Linux 4.19` record in `nmap-os-db`. TCP option order, timestamps,
+ECN and window scaling are not exposed by ESP-IDF's lwIP, so an exact match is
+not guaranteed. Run `tools/fingerprint_check.sh <device-ip>` to see what nmap
+reports.
 
 ## Testing & regression
 
 ```sh
 # host unit tests (event builder, form parser, line reader incl. echo/IAC)
 make -C test/host
-
-# Linux persona, from a lab host (real tools, no custom harness):
-nmap -O --osscan-guess -Pn <ip>          # expect a Linux 4.19 match
-nmap -sV -p 21,22,23,80 <ip>             # vsftpd 3.0.3 / OpenSSH_7.9p1 / Apache 2.4.38
-nmap --script ssh2-enum-algos -p 22 <ip>
-ssh root@<ip>                            # real KEX; captured password attempts
-lftp <ip>                                # FTP login capture + PASV listing
-curl -v http://<ip>/                     # Apache headers / error pages
 
 # golden behaviour check (needs the hardware): capture a baseline with the
 # old firmware, re-run with the new one, diff the event streams
@@ -285,19 +232,8 @@ python3 tools/golden_check.py logs/baseline/micropot-*.jsonl \
 ### Known limitations
 
 - `esp_http_server` binds `INADDR_ANY`, so phase 2's multi-IP HTTP will need
-  one server instance per virtual IP (the `httpd` service already carries
-  `vaddr` through `mp_xport`).
-- Credentials are matched against a static weak-password table; the honeypot
-  never authenticates real users.
-- wolfSSH advertises its own KEX/cipher/MAC algorithm lists. They let a
-  client connect, but `nmap --script ssh2-enum-algos` can tell them apart
-  from OpenSSH 7.9p1's `myproposal.h` lists (the protocol id itself is the
-  exact upstream `SSH-2.0-OpenSSH_7.9p1`).
-- FTP passive mode uses one fixed data port (50000), enough for scanners and
-  a single lftp session; concurrent data transfers are not isolated.
-- mp_linuxfs is a compiled-in table; the reserved `storage` partition is not
-  used yet.
-- mp_stack419 keeps its rx/tx rings in PSRAM and is bounded by the global
-  session budget; timestamped (TS=on) 4.19 variants are a parameter preset
-  away but not wired to a Kconfig switch.
+  one server instance per virtual IP (tracked as a design risk).
+- Telnet credentials are matched against a static weak-password table; the
+  honeypot never authenticates real users.
+- SSH is banner-level only: no key exchange, no login capture.
 - Single global log persona: phase 2 moves persona into each event's session.

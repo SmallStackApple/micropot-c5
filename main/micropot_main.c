@@ -4,10 +4,10 @@
  * Single device IP hosting two brand-driven honeypot services (Telnet + HTTP)
  * with structured JSON event logging to a PC collector.
  */
-#include <string.h>
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include <string.h>
 
 #include "esp_log.h"
 #include "esp_system.h"
@@ -15,17 +15,13 @@
 
 #include "mp_core.h"
 #include "mp_brand_hikvision.h"
-#include "mp_ftpd.h"
 #include "mp_brand_linux419.h"
 #include "mp_brand_printer.h"
 #include "mp_brand_router.h"
 #include "mp_http.h"
-#include "mp_httpd.h"
 #include "mp_log.h"
 #include "mp_net.h"
-#include "mp_s419_params.h"
 #include "mp_ssh.h"
-#include "mp_sshd.h"
 #include "mp_stack419.h"
 #include "mp_telnet.h"
 
@@ -96,32 +92,25 @@ void app_main(void)
      * socket, which is why mp_net_init() precedes mp_log_init(). */
     ESP_ERROR_CHECK(mp_net_init(brand->meta->mac_oui, persona->hostname));
 
-    /* Persona-selected transport. When the brand carries a "stack419"
-     * behaviour, services are carried by the Linux 4.19 TCP/IP engine
-     * instead of lwIP; lwIP keeps handling ARP and the log transport. */
-    if (persona->transport && strcmp(persona->transport, "s419") == 0) {
-        const mp_s419_params_t *par = mp_brand_behavior(brand, "stack419");
-        if (par && mp_stack419_init(par) == ESP_OK) {
-            mp_xport_use(&mp_xport_s419);
-            ESP_LOGI(TAG, "transport: Linux 4.19 engine (mp_stack419)");
-        } else {
-            ESP_LOGE(TAG, "stack419 requested but unavailable, using lwIP");
-        }
-    }
-
     ESP_ERROR_CHECK(mp_log_init());
     mp_xport_set_overload_hook(on_session_overload);
 
+    /* Personas that emulate a Linux host run their services on the
+     * Linux-4.19-behaving TCP/IP engine instead of lwIP sockets. The wire
+     * parameters arrive as a brand behaviour blob, keeping the engine
+     * itself brand-agnostic. */
+    if (persona->transport && strcmp(persona->transport, "s419") == 0) {
+        const mp_s419_params_t *par = mp_brand_behavior(brand, "stack419");
+        if (!par) {
+            fatal_restart("persona wants s419 but brand has no stack419 behaviour");
+        }
+        ESP_ERROR_CHECK(mp_stack419_init(par));
+        mp_xport_use(&mp_xport_s419);
+    }
+
     mp_registry_register(mp_telnet_get_ops(), mp_bind_any(CONFIG_MICROPOT_TELNET_PORT));
     mp_registry_register(mp_http_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));
-    /* Apache-style server on mp_xport: the Linux 4.19 persona uses this
-     * one, vendor brands keep the esp_http_server path above. */
-    mp_registry_register(mp_httpd_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));
     mp_registry_register(mp_ssh_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
-    /* Real SSH (wolfSSH) for the Linux persona; vendor brands keep the
-     * banner-level mp_ssh above. */
-    mp_registry_register(mp_sshd_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
-    mp_registry_register(mp_ftpd_get_ops(), mp_bind_any(CONFIG_MICROPOT_FTP_PORT));
 
     char ip[16] = "0.0.0.0";
     char gw[16] = "0.0.0.0";

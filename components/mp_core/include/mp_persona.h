@@ -26,9 +26,7 @@ typedef struct {
     const char *services[MP_MAX_SERVICES];
     uint8_t     n_services;
     const char *hostname;
-    /** Transport backend: NULL/"lwip" for BSD sockets, "s419" for the
-     *  Linux 4.19 TCP/IP engine. The backend must be initialised by main. */
-    const char *transport;
+    const char *transport;            /* xport backend: NULL/"lwip" or "s419" */
 } mp_persona_t;
 
 /** Currently selected persona (chosen by Kconfig). */

@@ -11,15 +11,10 @@
 #include <string.h>
 
 #include "mp_brand_linux419.h"
-#include "mp_ftpd_behavior.h"
 #include "mp_http_behavior.h"
-#include "mp_httpd_behavior.h"
-#include "mp_linuxfs.h"
 #include "mp_net.h"
 #include "mp_s419_params.h"
-#include "mp_shell.h"
 #include "mp_ssh_behavior.h"
-#include "mp_sshd.h"
 #include "mp_telnet_behavior.h"
 
 /* Embedded page resources (see EMBED_TXTFILES in CMakeLists.txt). */
@@ -186,21 +181,6 @@ static const mp_http_behavior_t s_http = {
     .n_routes = 0,
 };
 
-/* Apache 2.4.38 style, generic (no distro suffix). The mp_httpd service
- * implements the protocol; these are the persona's pages and credentials. */
-static const mp_httpd_behavior_t s_httpd = {
-    .server_hdr = "Apache/2.4.38",
-    .realm = "Restricted Area",
-    .hostname = "linux",
-    .login_html = (const char *)linux_login_html_start,
-    .fail_html = (const char *)linux_fail_html_start,
-    .admin_html = (const char *)linux_admin_html_start,
-    .creds = s_creds,
-    .n_creds = sizeof(s_creds) / sizeof(s_creds[0]),
-    .keepalive_ms = 5000,
-    .max_requests = 100,
-};
-
 /* -------------------------------------------------------------- metadata */
 
 static const mp_brand_meta_t s_meta = {
@@ -277,14 +257,6 @@ static const char *linux_exec(const mp_session_t *s, const char *cmdline,
     return NULL;
 }
 
-/* bash-style shell over the persona's fake filesystem */
-static const mp_shell_cfg_t s_shell = {
-    .fs = &mp_lfs_linux419,
-    .hostname = "linux",
-    .user = "root",
-    .proto = "telnet",
-};
-
 static const mp_telnet_behavior_t s_telnet = {
     .banner = "Linux 4.19\r\n"
               "Welcome to the Linux 4.19 server",
@@ -298,52 +270,19 @@ static const mp_telnet_behavior_t s_telnet = {
     .cmds = s_cmds,
     .n_cmds = sizeof(s_cmds) / sizeof(s_cmds[0]),
     .exec = linux_exec,
-    .shell = &s_shell,
 };
 
-/* Banner-level fallback (kept for lightweight personas). */
+/* OpenSSH 7.9 ships with the distros that use the 4.19 kernel. */
 static const mp_ssh_behavior_t s_ssh = {
     .banner = "SSH-2.0-OpenSSH_7.9p1",
     .linger_ms = 4000,
 };
 
-/* Real SSH: wolfSSH completes the handshake and the shell runs over the
- * SSH channel. Upstream 7.9p1 protocol id, generic (no distro suffix). */
-static const mp_shell_cfg_t s_shell_ssh = {
-    .fs = &mp_lfs_linux419,
-    .hostname = "linux",
-    .user = "root",
-    .proto = "ssh",
-};
-
-static const mp_sshd_behavior_t s_sshd = {
-    .proto_id = "SSH-2.0-OpenSSH_7.9p1",
-    .creds = s_creds,
-    .n_creds = sizeof(s_creds) / sizeof(s_creds[0]),
-    .shell = &s_shell_ssh,
-    .handshake_timeout_ms = 30000,
-};
-
-/* vsftpd 3.0.3 (CVE-2021-30047 / CVE-2021-3618 are version-attributable). */
-static const mp_ftpd_behavior_t s_ftpd = {
-    .banner = "220 (vsFTPd 3.0.3)\r\n",
-    .creds = s_creds,
-    .n_creds = sizeof(s_creds) / sizeof(s_creds[0]),
-    .root = "/home/admin",
-    .data_port = 50000,
-    .hostname = "linux",
-};
-
 static const mp_brand_behavior_entry_t s_behaviors[] = {
-    { "telnet",   &s_telnet },
-    { "http",     &s_http   },
-    { "httpd",    &s_httpd  },
-    { "ssh",      &s_ssh    },
-    { "sshd",     &s_sshd   },
-    { "ftpd",     &s_ftpd   },
-    /* Drives the mp_stack419 engine when this persona runs on it: the
-     * kernel personality (TTL, MSS, window, option layout, ISN, timers)
-     * is data, not code. */
+    { "telnet",   &s_telnet   },
+    { "http",     &s_http     },
+    { "ssh",      &s_ssh      },
+    /* Linux 4.19 TCP/IP wire personality for the stack419 engine */
     { "stack419", &mp_s419_params_linux419 },
     { NULL, NULL },
 };

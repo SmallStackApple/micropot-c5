@@ -353,17 +353,6 @@ void mp_log_http_login(const mp_session_t *s, const char *user, const char *pass
     mp_evt_send(&e);
 }
 
-void mp_log_ftp_login(const mp_session_t *s, const char *user, const char *pass,
-                      bool ok)
-{
-    mp_evt_t e;
-    mp_evt_begin(&e, s, "ftp", "ftp.login_attempt");
-    mp_evt_str(&e, "user", user);
-    mp_evt_str(&e, "pass", pass);
-    mp_evt_str(&e, "result", ok ? "ok" : "fail");
-    mp_evt_send(&e);
-}
-
 void mp_log_http_notfound(const mp_session_t *s, const char *uri)
 {
     mp_evt_t e;

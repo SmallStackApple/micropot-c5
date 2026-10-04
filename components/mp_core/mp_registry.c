@@ -47,12 +47,9 @@ esp_err_t mp_registry_start_all(const mp_persona_t *persona, const mp_brand_t *b
         svc->brand = brand;
         esp_err_t err = svc->ops->start(svc);
         if (err != ESP_OK) {
-            /* A honeypot should expose whatever it can: a single broken
-             * service must not take the whole device down (previously this
-             * rebooted, which turned one failure into a reboot loop). */
-            ESP_LOGE(TAG, "service '%s' failed to start: %s (continuing)",
-                     svc->ops->name, esp_err_to_name(err));
-            continue;
+            ESP_LOGE(TAG, "service '%s' failed to start: %s", svc->ops->name,
+                     esp_err_to_name(err));
+            return err;
         }
         svc->started = true;
         ESP_LOGI(TAG, "service '%s' started on port %u", svc->ops->name, svc->bind.port);

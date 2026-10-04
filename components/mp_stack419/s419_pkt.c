@@ -102,8 +102,8 @@ static size_t put_tcp(uint8_t *out, uint32_t src_nbo, uint32_t dst_nbo,
     uint8_t *tcp = out + S419_IP_HLEN;
     size_t hdr_len = S419_TCP_HLEN + opts_len;
 
-    put16(tcp + 0, sport_nbo); /* ports are host order like the addresses */
-    put16(tcp + 2, dport_nbo);
+    memcpy(tcp + 0, &sport_nbo, 2); /* keep network byte order */
+    memcpy(tcp + 2, &dport_nbo, 2);
     put32(tcp + 4, seq);
     put32(tcp + 8, ack);
     tcp[12] = (uint8_t)((hdr_len / 4) << 4);
@@ -114,13 +114,23 @@ static size_t put_tcp(uint8_t *out, uint32_t src_nbo, uint32_t dst_nbo,
     if (opts_len) {
         memcpy(tcp + S419_TCP_HLEN, opts, opts_len);
     }
-    if (payload_len) {
+    if (payload && payload_len) {
         memcpy(tcp + hdr_len, payload, payload_len);
     }
 
     /* The checksum covers the IP pseudo header, so it can only be computed
      * by the caller after s419_put_ip() filled the addresses. */
     return hdr_len + payload_len;
+}
+
+/** (Re)compute the TCP checksum of a built packet (call after the payload
+ *  area was filled out-of-band, e.g. straight from a tx ring). */
+void s419_tcp_set_cksum(uint8_t *pkt, size_t tcp_len)
+{
+    uint8_t *tcp = pkt + S419_IP_HLEN;
+    tcp[16] = 0;
+    tcp[17] = 0;
+    put16(tcp + 16, tcp_cksum(pkt, tcp, tcp_len));
 }
 
 size_t s419_build_synack(uint8_t *out, const mp_s419_params_t *par,
@@ -154,7 +164,7 @@ size_t s419_build_synack(uint8_t *out, const mp_s419_params_t *par,
     s419_put_ip(out, (uint16_t)(S419_IP_HLEN + tcp_len),
                 par->tcp_ipid_zero ? 0 : 1, par->tcp_df, par->ttl, IP_PROTO_TCP,
                 src_nbo, dst_nbo);
-    put16(out + S419_IP_HLEN + 16, tcp_cksum(out, out + S419_IP_HLEN, tcp_len));
+    s419_tcp_set_cksum(out, tcp_len);
     return S419_IP_HLEN + tcp_len;
 }
 
@@ -169,7 +179,7 @@ size_t s419_build_tcp(uint8_t *out, const mp_s419_params_t *par,
     s419_put_ip(out, (uint16_t)(S419_IP_HLEN + tcp_len),
                 par->tcp_ipid_zero ? 0 : 1, par->tcp_df, par->ttl, IP_PROTO_TCP,
                 src_nbo, dst_nbo);
-    put16(out + S419_IP_HLEN + 16, tcp_cksum(out, out + S419_IP_HLEN, tcp_len));
+    s419_tcp_set_cksum(out, tcp_len);
     return S419_IP_HLEN + tcp_len;
 }
 
@@ -188,13 +198,11 @@ size_t s419_build_icmp_echo_reply(uint8_t *out, const uint8_t *req,
     put16(icmp + 2, 0);
     put16(icmp + 2, s419_cksum(icmp, icmp_len));
 
-    uint32_t src, dst;
-    src = ((uint32_t)req[16] << 24) | ((uint32_t)req[17] << 16) |
-          ((uint32_t)req[18] << 8) | req[19]; /* reply src = original dst */
-    dst = ((uint32_t)req[12] << 24) | ((uint32_t)req[13] << 16) |
-          ((uint32_t)req[14] << 8) | req[15];
+    uint32_t src_nbo, dst_nbo;
+    memcpy(&src_nbo, req + 16, 4); /* reply src = original dst (us) */
+    memcpy(&dst_nbo, req + 12, 4);
     s419_put_ip(out, (uint16_t)(S419_IP_HLEN + icmp_len), ipid, par->icmp_df,
-                par->ttl, IP_PROTO_ICMP, src, dst);
+                par->ttl, IP_PROTO_ICMP, src_nbo, dst_nbo);
     return S419_IP_HLEN + icmp_len;
 }
 

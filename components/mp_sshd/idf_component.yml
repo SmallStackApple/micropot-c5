@@ -1,4 +1,0 @@
-dependencies:
-  idf: ">=5.0"
-  wolfssl/wolfssl: "^5.8.2"
-  wolfssl/wolfssh: "^1.4.20"

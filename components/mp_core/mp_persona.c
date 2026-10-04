@@ -37,12 +37,10 @@ static const mp_persona_t s_personas[] = {
         .id = "linux-419",
         .brand_id = "linux_419",
         .bind = { .vaddr = 0, .port = 0 },
-        /* HTTP currently runs on esp_http_server (lwIP-bound); the Apache-
-         * style mp_httpd replaces it and joins this list in the next step.
-         * Until then port 80 is genuinely closed and answered with a 4.19
-         * RST by the engine. */
-        .services = { "telnet", "httpd", "sshd", "ftpd" },
-        .n_services = 4,
+        /* http joins once the Apache-style mp_httpd lands (esp_http_server
+         * is bound to lwIP sockets and cannot run on the 4.19 stack). */
+        .services = { "telnet", "ssh" },
+        .n_services = 2,
         .hostname = "linux",
         .transport = "s419",
     },

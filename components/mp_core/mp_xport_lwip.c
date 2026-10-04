@@ -179,8 +179,7 @@ static void accept_loop(void *arg)
         char task_name[16];
         snprintf(task_name, sizeof(task_name), "%s-%u", cfg->name,
                  (unsigned)(a->sess.id & 0xff));
-        uint32_t stack = cfg->stack_size ? cfg->stack_size : MP_CONN_TASK_STACK;
-        if (xTaskCreate(conn_task, task_name, stack, a,
+        if (xTaskCreate(conn_task, task_name, MP_CONN_TASK_STACK, a,
                         MP_CONN_TASK_PRIO, NULL) != pdPASS) {
             ESP_LOGE(TAG, "%s: failed to spawn connection task", cfg->name);
             close(sock);

@@ -45,11 +45,6 @@ menu "MicroPot-C5 honeypot"
             range 1 65535
             default 22
 
-        config MICROPOT_FTP_PORT
-            int "FTP port (vsftpd-style honeypot)"
-            range 1 65535
-            default 21
-
         config MICROPOT_MAX_SESSIONS
             int "Max concurrent honeypot sessions (global budget)"
             range 2 32

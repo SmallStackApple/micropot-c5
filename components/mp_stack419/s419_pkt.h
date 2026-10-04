@@ -11,8 +11,7 @@
  * byte layouts stay auditable against the 4.19 sources they mirror.
  *
  * All builders write a complete IPv4 packet (header + payload) into @p out
- * and return its total length. Addresses are host-order uint32 (0xC0A80105
- * is 192.168.1.5) and ports host order; builders serialize big-endian.
+ * and return its total length.
  * ---------------------------------------------------------------------- */
 
 #define S419_IP_HLEN   20
@@ -30,6 +29,9 @@
 
 /** RFC 1071 internet checksum. */
 uint16_t s419_cksum(const void *data, size_t len);
+
+/** (Re)compute the TCP checksum field of a built IPv4 packet. */
+void     s419_tcp_set_cksum(uint8_t *pkt, size_t tcp_len);
 
 /** Fill the 20-byte IPv4 header (checksum included). */
 void s419_put_ip(uint8_t *out, uint16_t total_len, uint16_t id, bool df,

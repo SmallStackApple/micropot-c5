@@ -13,17 +13,12 @@ CONFIG_SPIRAM_USE_MALLOC=y
 
 # --- Networking: more sockets for concurrent honeypot services + logger ----
 CONFIG_LWIP_MAX_SOCKETS=16
-# mp_stack419 crafts and sends packets from the lwIP tcpip thread; give that
-# task room for the deeper call chain (software crypto + shell callbacks
-# also run in connection tasks, not here).
-CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=8192
 
-# --- lwIP defaults ---------------------------------------------------------
-# The linux_419 persona does NOT depend on these: its wire personality is
-# emulated by mp_stack419 from the nmap-os-db "Fingerprint Linux 4.19"
-# record (see components/mp_stack419/mp_stack419.c). lwIP only carries ARP,
-# the log transport and the vendor-brand services, so these values are just
-# sane defaults.
+# --- Linux 4.19 TCP/IP fingerprint approximation --------------------------
+# Target (nmap-os-db "Fingerprint Linux 4.19", generic Debian record):
+#   TTL 64, MSS 1460 (0x5B4), advertised window 64240 (0xFAF0), MSL 60000.
+# Only the values ESP-IDF lwIP exposes are set here; TCP option order,
+# timestamps, ECN and window-scale remain lwIP defaults (best effort).
 CONFIG_LWIP_IP_DEFAULT_TTL=64
 CONFIG_LWIP_TCP_MSS=1460
 CONFIG_LWIP_TCP_WND_DEFAULT=64240

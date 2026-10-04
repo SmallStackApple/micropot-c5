@@ -11,7 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "lwip/def.h"
 #include "lwip/ip_addr.h"
 #include "lwip/pbuf.h"
 #include "lwip/raw.h"
@@ -46,11 +45,10 @@ static struct raw_pcb *s_pcb_tx;   /* IP_HDRINCL sender */
 static s419_listener_t s_listeners[S419_MAX_LISTENERS];
 static size_t          s_n_listeners;
 
-s419_tcb              *s419_tcb_head;
+static s419_tcb       *s_tcbs;
 static uint16_t        s_synrecv_count;
 static uint16_t        s_icmp_id;
 static int64_t         s_last_flood_evt_ms;
-static bool            s_ready;
 
 int64_t s419_now_ms(void)
 {
@@ -59,8 +57,7 @@ int64_t s419_now_ms(void)
 
 uint32_t s419_our_ip(void)
 {
-    /* host-order numeric (mp_net hands out the raw network-order word) */
-    return lwip_ntohl(mp_net_get_ip());
+    return mp_net_get_ip(); /* network byte order, 0 before DHCP */
 }
 
 uint16_t s419_icmp_ipid(void)
@@ -70,31 +67,20 @@ uint16_t s419_icmp_ipid(void)
 
 /* ---------------------------------------------------------------- output */
 
-void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_host)
+void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo)
 {
-    static int64_t s_last_err_ms;
-    /* PBUF_LINK reserves the L2 header headroom that netif->output()
-     * (ethernet_output) prepends; a PBUF_RAW pbuf has none and every send
-     * would fail with ERR_BUF while the IP header itself is correct. */
-    struct pbuf *p = pbuf_alloc(PBUF_LINK, (u16_t)len, PBUF_RAM);
+    struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_RAM);
     if (!p) {
-        ESP_LOGW(TAG, "tx: pbuf alloc failed (%u)", (unsigned)len);
+        ESP_LOGD(TAG, "tx: pbuf alloc failed (%u)", (unsigned)len);
         return;
     }
     pbuf_take(p, pkt, (u16_t)len);
     ip_addr_t dst;
-    IP_ADDR4(&dst, (dst_host >> 24) & 0xff, (dst_host >> 16) & 0xff,
-             (dst_host >> 8) & 0xff, dst_host & 0xff);
-    err_t err = raw_sendto(s_pcb_tx, p, &dst); /* HDRINCL: sent verbatim */
+    ip_addr_t *dstp = &dst; /* avoid &local inside lwIP's boolean macros */
+    ip_addr_set_ip4_u32(dstp, dst_nbo);
+    err_t err = raw_sendto(s_pcb_tx, p, dstp); /* HDRINCL: sent verbatim */
     if (err != ERR_OK) {
-        int64_t now = s419_now_ms();
-        if (now - s_last_err_ms > 1000) { /* throttle under flood */
-            s_last_err_ms = now;
-            ESP_LOGW(TAG, "tx: raw_sendto -> %d (dst %u.%u.%u.%u, len %u, pcb %p)",
-                     err, (dst_host >> 24) & 0xff, (dst_host >> 16) & 0xff,
-                     (dst_host >> 8) & 0xff, dst_host & 0xff,
-                     (unsigned)len, (void *)s_pcb_tx);
-        }
+        ESP_LOGD(TAG, "tx: raw_sendto -> %d", err);
     }
     pbuf_free(p);
 }
@@ -104,25 +90,6 @@ void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_host)
 void s419_report_overload(const s419_listener_t *lst)
 {
     mp_xport_report_overload(lst->name, lst->port);
-}
-
-uint16_t s419_synrecv_count(void)
-{
-    return s_synrecv_count;
-}
-
-void s419_synrecv_inc(void)
-{
-    if (s_synrecv_count < 0xffff) {
-        s_synrecv_count++;
-    }
-}
-
-void s419_synrecv_dec(void)
-{
-    if (s_synrecv_count) {
-        s_synrecv_count--;
-    }
 }
 
 void s419_report_synflood(void)
@@ -171,13 +138,13 @@ s419_tcb *s419_tcb_alloc(void)
 
 void s419_tcb_link(s419_tcb *tcb)
 {
-    tcb->next = s419_tcb_head;
-    s419_tcb_head = tcb;
+    tcb->next = s_tcbs;
+    s_tcbs = tcb;
 }
 
 void s419_tcb_unlink_free(s419_tcb *tcb)
 {
-    s419_tcb **pp = &s419_tcb_head;
+    s419_tcb **pp = &s_tcbs;
     while (*pp) {
         if (*pp == tcb) {
             *pp = tcb->next;
@@ -199,13 +166,18 @@ void s419_tcb_unlink_free(s419_tcb *tcb)
 s419_tcb *s419_tcb_find(uint32_t lip, uint32_t rip,
                         uint16_t lport, uint16_t rport)
 {
-    for (s419_tcb *t = s419_tcb_head; t; t = t->next) {
+    for (s419_tcb *t = s_tcbs; t; t = t->next) {
         if (t->lip == lip && t->rip == rip &&
             t->lport == lport && t->rport == rport) {
             return t;
         }
     }
     return NULL;
+}
+
+s419_tcb *s419_tcbs(void)
+{
+    return s_tcbs;
 }
 
 /* ------------------------------------------------------------- listeners */
@@ -221,8 +193,7 @@ const s419_listener_t *s419_listener_find(uint16_t port)
 }
 
 esp_err_t s419_listener_add(uint16_t port, const char *name,
-                            mp_conn_handler_t handler, void *arg,
-                            uint16_t stack_size)
+                            mp_conn_handler_t handler, void *arg)
 {
     if (s_n_listeners >= S419_MAX_LISTENERS) {
         return ESP_ERR_NO_MEM;
@@ -235,7 +206,6 @@ esp_err_t s419_listener_add(uint16_t port, const char *name,
     l->name = name;
     l->handler = handler;
     l->arg = arg;
-    l->stack_size = stack_size;
     ESP_LOGI(TAG, "%s listening on port %u (stack419)", name, port);
     return ESP_OK;
 }
@@ -283,15 +253,6 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 
     if (lport >= S419_EPHEMERAL_MIN) {
         return 0; /* lwIP's own outbound flows (log collector) */
-    }
-
-    {
-        static bool first_rx;
-        if (!first_rx) {
-            first_rx = true;
-            ESP_LOGW(TAG, "first inbound TCP for us: dport=%u flags=0x%02x",
-                     lport, flags);
-        }
     }
 
     s419_tcb *tcb = s419_tcb_find(ip_dst, ip_src, lport, rport);
@@ -366,9 +327,7 @@ static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (icmp[0] != 8 || icmp[1] != 0) {
         return 0; /* only echo requests are ours (nmap IE test) */
     }
-    /* tcpip-thread scratch: the callback chain is serial, and the default
-     * tcpip task stack (3 KB) cannot hold this on the stack */
-    static uint8_t pkt[S419_MAX_PKT];
+    uint8_t pkt[S419_MAX_PKT];
     size_t n = s419_build_icmp_echo_reply(pkt, ip, p->tot_len,
                                           s419_icmp_ipid(), s419_par);
     if (n) {
@@ -404,19 +363,22 @@ static void core_up(void *ctx)
     raw_recv(s_pcb_udp, on_udp, NULL);
     raw_recv(s_pcb_icmp, on_icmp, NULL);
     sys_timeout(10, s419_tick, NULL);
-    s_ready = true;
     ESP_LOGI(TAG, "stack419 engine up (ttl=%u mss=%u wnd=%u wscale=%u ts=%d)",
              s419_par->ttl, s419_par->mss, s419_par->rcv_wnd,
              s419_par->wscale, s419_par->timestamps);
+}
+
+static void core_down(void *ctx)
+{
+    (void)ctx;
+    if (s_pcb_tcp)  { raw_remove(s_pcb_tcp);  s_pcb_tcp = NULL; }
+    if (s_pcb_udp)  { raw_remove(s_pcb_udp);  s_pcb_udp = NULL; }
+    if (s_pcb_icmp) { raw_remove(s_pcb_icmp); s_pcb_icmp = NULL; }
+    if (s_pcb_tx)   { raw_remove(s_pcb_tx);   s_pcb_tx = NULL; }
 }
 
 void s419_core_init(const mp_s419_params_t *params)
 {
     s419_par = params;
     tcpip_callback_with_block(core_up, NULL, 1);
-}
-
-bool s419_core_ready(void)
-{
-    return s_ready;
 }

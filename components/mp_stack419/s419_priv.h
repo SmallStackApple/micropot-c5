@@ -49,7 +49,6 @@ typedef struct {
     const char       *name;
     mp_conn_handler_t handler;
     void             *arg;
-    uint16_t          stack_size; /* per-connection task stack; 0 = default */
 } s419_listener_t;
 
 typedef struct s419_tcb {
@@ -66,10 +65,8 @@ typedef struct s419_tcb {
     bool     dead;          /* RST received / timed out: no more output */
     bool     app_attached;  /* a conn task owns the app side */
     bool     close_posted;  /* app asked to close (FIN queued) */
-    bool     fin_queued;    /* FIN follows the pending data */
     bool     fin_sent;
     bool     fin_acked;
-    bool     budget_held;   /* this TCB took a slot from the session budget */
     bool     flushed_posted;/* a flush tcpip_callback is already queued */
 
     /* peer parameters learned from the SYN */
@@ -119,23 +116,18 @@ void      s419_core_init(const mp_s419_params_t *params);
 uint32_t  s419_our_ip(void);                  /* nbo, 0 when unknown */
 uint16_t  s419_icmp_ipid(void);               /* incrementing counter */
 void      s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo);
-extern s419_tcb *s419_tcb_head;               /* tcpip thread only */
-
 s419_tcb *s419_tcb_alloc(void);
 void      s419_tcb_link(s419_tcb *tcb);
 void      s419_tcb_unlink_free(s419_tcb *tcb);
 s419_tcb *s419_tcb_find(uint32_t lip, uint32_t rip,
                         uint16_t lport, uint16_t rport);
+s419_tcb *s419_tcbs(void);                    /* list head, tcpip thread only */
 const s419_listener_t *s419_listener_find(uint16_t port);
 esp_err_t s419_listener_add(uint16_t port, const char *name,
-                            mp_conn_handler_t handler, void *arg,
-                            uint16_t stack_size);
+                            mp_conn_handler_t handler, void *arg);
 int64_t   s419_now_ms(void);
 void      s419_report_overload(const s419_listener_t *lst);
 void      s419_report_synflood(void);
-uint16_t  s419_synrecv_count(void);
-void      s419_synrecv_inc(void);
-void      s419_synrecv_dec(void);
 
 /* ---- s419_tcp.c ---- */
 void s419_tcp_new_syn(const s419_listener_t *lst,
@@ -147,11 +139,10 @@ void s419_tcp_input(s419_tcb *tcb, const uint8_t *tcp_hdr, size_t tcp_len,
 void s419_tcp_closed_reset(uint32_t lip, uint32_t rip,
                            uint16_t lport, uint16_t rport,
                            const uint8_t *tcp_hdr, size_t tcp_len);
+void s419_tcp_active_reset(s419_tcb *tcb);
 void s419_tcp_tick(void);                     /* 10 ms, tcpip thread */
 void s419_tcp_flush_msg(void *ctx);           /* tcpip_callback: send pending */
-void s419_tcp_close_msg(void *ctx);           /* tcpip_callback: queue FIN */
-void s419_tcp_detach_msg(void *ctx);          /* tcpip_callback: app is gone */
-void s419_tcp_abort(s419_tcb *tcb);           /* tcpip thread: RST + drop */
+void s419_tcp_close_msg(void *ctx);           /* tcpip_callback: FIN/detach */
 
 /* app side (called from conn tasks via s419_xport conn ops) */
 int  s419_app_recv(s419_tcb *tcb, void *buf, size_t len, uint32_t timeout_ms);
@@ -160,10 +151,7 @@ void s419_app_shutdown(s419_tcb *tcb);
 void s419_app_release(s419_tcb *tcb);
 
 /* ---- s419_xport.c ---- */
-/** Spawn the application task for a completed handshake. Returns false if
- *  the TCB was aborted (and freed) because the task could not be created. */
-bool s419_established(s419_tcb *tcb);         /* tcpip thread */
-bool s419_core_ready(void);
+bool s419_established(s419_tcb *tcb);         /* tcpip thread; false = TCB gone */
 
 static inline uint16_t s419_rd16(const uint8_t *p)
 {

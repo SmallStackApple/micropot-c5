@@ -6,7 +6,6 @@
 #include "mp_brand.h"
 #include "mp_linekit.h"
 #include "mp_session.h"
-#include "mp_shell.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,9 +30,6 @@ typedef struct {
     /* Optional dynamic hook. NULL => pure data-table driven matching. */
     const char *(*exec)(const mp_session_t *s, const char *cmdline,
                         char *out, size_t out_len);
-    /* Preferred: a real shell interpreter (mp_shell) with a fake
-     * filesystem. When set, cmds/exec are not consulted. */
-    const mp_shell_cfg_t *shell;
 } mp_telnet_behavior_t;
 
 #ifdef __cplusplus

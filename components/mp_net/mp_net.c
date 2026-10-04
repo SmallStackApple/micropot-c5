@@ -1,5 +1,4 @@
 #include <string.h>
-#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -9,7 +8,6 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
-#include "esp_netif_sntp.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "mp_net.h"
@@ -32,24 +30,6 @@ static uint32_t           s_ip;
 static uint32_t           s_gw;
 static unsigned           s_retry;
 static bool               s_reconnect_pending;
-static bool               s_sntp_started;
-
-/* Wall clock: a real host knows the time, so HTTP Date headers and the
- * shell's `date` must too. SNTP starts on the first DHCP lease. */
-static void start_sntp(void)
-{
-    if (s_sntp_started) {
-        return;
-    }
-    s_sntp_started = true;
-    esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-    if (esp_netif_sntp_init(&cfg) == ESP_OK) {
-        esp_netif_sntp_start();
-        ESP_LOGI(TAG, "SNTP started (pool.ntp.org)");
-    } else {
-        ESP_LOGW(TAG, "SNTP init failed; clock stays unsynced");
-    }
-}
 
 static void reconnect_cb(void *arg)
 {
@@ -100,7 +80,6 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
         char buf[16];
         mp_net_get_ip_str(buf, sizeof(buf));
         ESP_LOGI(TAG, "got IP %s", buf);
-        start_sntp();
         xEventGroupSetBits(s_wifi_eg, WIFI_CONNECTED_BIT);
     }
 }
@@ -221,12 +200,6 @@ esp_err_t mp_net_wait_connected(uint32_t timeout_ms)
 uint32_t mp_net_get_ip(void)
 {
     return s_ip;
-}
-
-bool mp_net_time_synced(void)
-{
-    /* SNTP writes the RTC; anything past 2020 means it ran. */
-    return time(NULL) > 1600000000;
 }
 
 void mp_net_get_mac(uint8_t out[6])
