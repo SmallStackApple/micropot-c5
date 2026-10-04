@@ -27,6 +27,16 @@ menu "MicroPot-C5 honeypot"
             string "Static gateway"
             depends on MICROPOT_USE_STATIC_IP
             default "192.168.1.1"
+
+        config MICROPOT_LINK_PROBES
+            bool "Link-liveness probes (DEBUG: emits periodic ARP/ping)"
+            default n
+            help
+                Every 15s: ARP-request the gateway, ICMP-ping it once, and
+                send a gratuitous ARP; results appear in the stats line as
+                gwarp/gwping. A real Linux host never emits such periodic
+                traffic, so this MUST stay off in any build exposed to
+                scanners — it exists purely to diagnose link-layer stalls.
     endmenu
 
     menu "Honeypot services"
