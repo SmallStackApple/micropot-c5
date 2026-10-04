@@ -21,6 +21,7 @@
 #include "mp_http.h"
 #include "mp_httpd.h"
 #include "mp_log.h"
+#include "mp_sshd.h"
 #include "mp_net.h"
 #include "mp_ssh.h"
 #include "mp_stack419.h"
@@ -88,6 +89,9 @@ void app_main(void)
     mp_log_set_persona(persona->id);
     ESP_LOGI(TAG, "persona '%s' -> brand '%s' (%s %s)", persona->id, brand->meta->id,
              brand->meta->vendor, brand->meta->model);
+    if (brand->init) {
+        ESP_ERROR_CHECK(brand->init(brand));
+    }
 
     /* The network stack (esp_netif/lwIP) must be up before anything creates a
      * socket, which is why mp_net_init() precedes mp_log_init(). */
@@ -113,6 +117,7 @@ void app_main(void)
     mp_registry_register(mp_http_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));
     mp_registry_register(mp_httpd_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));
     mp_registry_register(mp_ssh_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
+    mp_registry_register(mp_sshd_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
 
     char ip[16] = "0.0.0.0";
     char gw[16] = "0.0.0.0";

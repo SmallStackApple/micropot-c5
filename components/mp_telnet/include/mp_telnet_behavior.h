@@ -35,7 +35,8 @@ typedef struct {
      * loop is delegated to the brand (e.g. mp_linuxsh). The hook logs
      * commands itself and returns the disconnect reason string. */
     const char *(*shell)(mp_conn_t *conn, const mp_session_t *sess,
-                         const void *ctx, const char *user);
+                         const void *ctx, const char *user,
+                         const char *proto);
     const void *shell_ctx;
 } mp_telnet_behavior_t;
 

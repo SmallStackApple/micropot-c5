@@ -26,8 +26,20 @@ typedef struct {
     const mp_linuxsh_config_t *cfg;
     char cwd[128];
     const char *user;
+    const char *proto; /* event namespace: "telnet" or "ssh" */
     bool root;
 } sh_t;
+
+/* log a command line as <proto>.command */
+static void log_command(sh_t *sh, const char *cmd)
+{
+    char evt[24];
+    snprintf(evt, sizeof(evt), "%s.command", sh->proto);
+    mp_evt_t e;
+    mp_evt_begin(&e, sh->sess, sh->proto, evt);
+    mp_evt_str(&e, "cmd", cmd);
+    mp_evt_send(&e);
+}
 
 /* ------------------------------------------------------------ helpers */
 
@@ -419,8 +431,10 @@ static int cmd_download(sh_t *sh, const char *tool, int argc, char **argv)
     }
 
     /* the point of the honeypot: harvest the payload URL */
+    char evt[24];
+    snprintf(evt, sizeof(evt), "%s.download", sh->proto);
     mp_evt_t e;
-    mp_evt_begin(&e, sh->sess, "shell", "shell.download");
+    mp_evt_begin(&e, sh->sess, sh->proto, evt);
     mp_evt_str(&e, "tool", tool);
     mp_evt_str(&e, "url", url);
     mp_evt_send(&e);
@@ -544,7 +558,8 @@ static bool is_reboot_cmd(const char *cmd)
 }
 
 const char *mp_linuxsh_shell(mp_conn_t *conn, const mp_session_t *sess,
-                             const void *ctx, const char *user)
+                             const void *ctx, const char *user,
+                             const char *proto)
 {
     sh_t sh = {
         .conn = conn,
@@ -552,8 +567,37 @@ const char *mp_linuxsh_shell(mp_conn_t *conn, const mp_session_t *sess,
         .cfg = (const mp_linuxsh_config_t *)ctx,
         .cwd = "/root",
         .user = user && *user ? user : "root",
+        .proto = proto && *proto ? proto : "telnet",
         .root = !user || strcmp(user, "root") == 0,
     };
+    if (!sh.root && strcmp(sh.cwd, "/root") == 0) {
+        snprintf(sh.cwd, sizeof(sh.cwd), "/home/%s", sh.user);
+    }
+
+    /* login(1) prints the motd and the last-login line before the prompt */
+    const mpfs_node_t *motd = mpfs_lookup(sh.cfg->fs, sh.cfg->fs_n, "/etc/motd");
+    if (motd && motd->content) {
+        for (const char *p = motd->content; *p;) {
+            const char *nl = strchr(p, '\n');
+            if (nl) {
+                mp_conn_send(conn, p, (size_t)(nl - p));
+                out(&sh, "\r\n");
+                p = nl + 1;
+            } else {
+                out(&sh, p);
+                out(&sh, "\r\n");
+                break;
+            }
+        }
+    }
+    {
+        unsigned o0 = (unsigned)(sess->src_ip & 0xff);
+        unsigned o1 = (unsigned)((sess->src_ip >> 8) & 0xff);
+        unsigned o2 = (unsigned)((sess->src_ip >> 16) & 0xff);
+        unsigned o3 = (unsigned)((sess->src_ip >> 24) & 0xff);
+        outf(&sh, "Last login: Sat Oct  3 21:14:09 2026 from %u.%u.%u.%u\r\n",
+             o0, o1, o2, o3);
+    }
 
     const char *reason = "closed";
     char cmd[256];
@@ -576,7 +620,7 @@ const char *mp_linuxsh_shell(mp_conn_t *conn, const mp_session_t *sess,
             continue;
         }
 
-        mp_log_telnet_command(sess, cmd);
+        log_command(&sh, cmd);
 
         int argc = split(cmd, argv, 16);
         if (!argc) {

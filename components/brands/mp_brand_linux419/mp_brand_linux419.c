@@ -18,12 +18,20 @@
 #include "mp_net.h"
 #include "mp_s419_params.h"
 #include "mp_ssh_behavior.h"
+#include "mp_sshd_behavior.h"
 #include "mp_telnet_behavior.h"
 
 /* Embedded page resources (legacy lwIP http fallback; see CMakeLists). */
 extern const uint8_t linux_login_html_start[] asm("_binary_linux_login_html_start");
 extern const uint8_t linux_fail_html_start[]  asm("_binary_linux_fail_html_start");
 extern const uint8_t linux_admin_html_start[] asm("_binary_linux_admin_html_start");
+
+/* Host keys generated once for this honeypot identity (keys/, PEM).
+ * A real host keeps stable host keys across boots; so do we. */
+extern const uint8_t ssh_host_rsa_key_start[]   asm("_binary_ssh_host_rsa_key_start");
+extern const uint8_t ssh_host_rsa_key_end[]     asm("_binary_ssh_host_rsa_key_end");
+extern const uint8_t ssh_host_ecdsa_key_start[] asm("_binary_ssh_host_ecdsa_key_start");
+extern const uint8_t ssh_host_ecdsa_key_end[]   asm("_binary_ssh_host_ecdsa_key_end");
 
 /* ------------------------------------------------------- weak credentials */
 
@@ -105,18 +113,42 @@ static const mp_ssh_behavior_t s_ssh = {
     .linger_ms = 4000,
 };
 
+/* Real SSH-2.0 transport (wolfSSH) carrying the 7.9p1 identity.
+ * Non-const: key lengths are patched in brand init from the embedded
+ * binary symbols (their difference is not a C constant expression). */
+static mp_sshd_behavior_t s_sshd = {
+    .banner = "SSH-2.0-OpenSSH_7.9p1",
+    .creds = s_creds,
+    .n_creds = sizeof(s_creds) / sizeof(s_creds[0]),
+    .key_rsa = ssh_host_rsa_key_start,
+    .key_ecdsa = ssh_host_ecdsa_key_start,
+    .shell = mp_linuxsh_shell,
+    .shell_ctx = &mp_linux419_shell_cfg,
+};
+
 static const mp_brand_behavior_entry_t s_behaviors[] = {
     { "telnet",   &s_telnet   },
     { "http",     &s_http     },
     { "httpd",    &s_httpd    },
     { "ssh",      &s_ssh      },
+    { "sshd",     &s_sshd     },
     /* Linux 4.19 TCP/IP wire personality for the stack419 engine */
     { "stack419", &mp_s419_params_linux419 },
     { NULL, NULL },
 };
 
+static esp_err_t linux419_init(const mp_brand_t *self)
+{
+    (void)self;
+    s_sshd.key_rsa_len =
+        (uint32_t)(ssh_host_rsa_key_end - ssh_host_rsa_key_start);
+    s_sshd.key_ecdsa_len =
+        (uint32_t)(ssh_host_ecdsa_key_end - ssh_host_ecdsa_key_start);
+    return ESP_OK;
+}
+
 const mp_brand_t mp_brand_linux419 = {
     .meta = &s_meta,
     .behaviors = s_behaviors,
-    .init = NULL,
+    .init = linux419_init,
 };

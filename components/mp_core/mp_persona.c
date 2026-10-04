@@ -37,9 +37,8 @@ static const mp_persona_t s_personas[] = {
         .id = "linux-419",
         .brand_id = "linux_419",
         .bind = { .vaddr = 0, .port = 0 },
-        /* sshd (real OpenSSH 7.9p1 KEX) replaces the banner service once
-         * wolfSSH lands; ftpd joins in the last step. */
-        .services = { "telnet", "httpd", "ssh" },
+        /* ftpd joins in the last step. */
+        .services = { "telnet", "httpd", "sshd" },
         .n_services = 3,
         .hostname = "linux",
         .transport = "s419",

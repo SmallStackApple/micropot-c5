@@ -37,15 +37,16 @@ typedef struct {
 } mp_linuxsh_config_t;
 
 /**
- * Interactive shell loop, matching mp_telnet_behavior_t's shell hook.
- * Logs every command line as telnet.command; wget/curl additionally raise
- * shell.download events with the requested URL.
+ * Interactive shell loop, matching the telnet/sshd shell hook shape.
+ * Logs every command line as <proto>.command; wget/curl additionally
+ * raise <proto>.download events with the requested URL.
  *
  * @return disconnect reason: "logout", "reboot", "timeout", "closed",
  *         "send_error".
  */
 const char *mp_linuxsh_shell(mp_conn_t *conn, const mp_session_t *sess,
-                             const void *ctx, const char *user);
+                             const void *ctx, const char *user,
+                             const char *proto);
 
 #ifdef __cplusplus
 }
