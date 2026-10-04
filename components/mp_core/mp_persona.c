@@ -41,7 +41,7 @@ static const mp_persona_t s_personas[] = {
          * style mp_httpd replaces it and joins this list in the next step.
          * Until then port 80 is genuinely closed and answered with a 4.19
          * RST by the engine. */
-        .services = { "telnet", "httpd", "ssh" },
+        .services = { "telnet", "httpd", "sshd" },
         .n_services = 3,
         .hostname = "linux",
         .transport = "s419",

@@ -3,7 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES
         mp_stack419 mp_core mp_net mp_telnet mp_http mp_httpd mp_ssh
-        mp_linuxfs mp_shell
+        mp_sshd mp_linuxfs mp_shell
     EMBED_TXTFILES
         "www/linux_login.html"
         "www/linux_fail.html"

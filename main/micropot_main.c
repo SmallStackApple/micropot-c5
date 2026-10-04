@@ -24,6 +24,7 @@
 #include "mp_net.h"
 #include "mp_s419_params.h"
 #include "mp_ssh.h"
+#include "mp_sshd.h"
 #include "mp_stack419.h"
 #include "mp_telnet.h"
 
@@ -116,6 +117,9 @@ void app_main(void)
      * one, vendor brands keep the esp_http_server path above. */
     mp_registry_register(mp_httpd_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));
     mp_registry_register(mp_ssh_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
+    /* Real SSH (wolfSSH) for the Linux persona; vendor brands keep the
+     * banner-level mp_ssh above. */
+    mp_registry_register(mp_sshd_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
 
     char ip[16] = "0.0.0.0";
     char gw[16] = "0.0.0.0";

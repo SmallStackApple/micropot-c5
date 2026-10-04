@@ -49,6 +49,7 @@ typedef struct {
     const char       *name;
     mp_conn_handler_t handler;
     void             *arg;
+    uint16_t          stack_size; /* per-connection task stack; 0 = default */
 } s419_listener_t;
 
 typedef struct s419_tcb {
@@ -127,7 +128,8 @@ s419_tcb *s419_tcb_find(uint32_t lip, uint32_t rip,
                         uint16_t lport, uint16_t rport);
 const s419_listener_t *s419_listener_find(uint16_t port);
 esp_err_t s419_listener_add(uint16_t port, const char *name,
-                            mp_conn_handler_t handler, void *arg);
+                            mp_conn_handler_t handler, void *arg,
+                            uint16_t stack_size);
 int64_t   s419_now_ms(void);
 void      s419_report_overload(const s419_listener_t *lst);
 void      s419_report_synflood(void);

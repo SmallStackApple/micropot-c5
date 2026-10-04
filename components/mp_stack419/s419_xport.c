@@ -105,7 +105,9 @@ void s419_established(s419_tcb *tcb)
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "%s-%u", tcb->listener->name,
              (unsigned)(a->sess.id & 0xff));
-    if (xTaskCreate(conn_task, task_name, S419_CONN_TASK_STACK, a,
+    uint32_t stack = tcb->listener->stack_size ? tcb->listener->stack_size
+                                               : S419_CONN_TASK_STACK;
+    if (xTaskCreate(conn_task, task_name, stack, a,
                     S419_CONN_TASK_PRIO, NULL) != pdPASS) {
         ESP_LOGE(TAG, "cannot spawn %s task", tcb->listener->name);
         free(conn);
@@ -121,7 +123,8 @@ static esp_err_t s419_listen(const mp_listener_cfg_t *cfg)
     /* vaddr filtering (virtual IPs) arrives with phase 2; today the engine
      * answers on the station address only. */
     (void)cfg->vaddr;
-    return s419_listener_add(cfg->port, cfg->name, cfg->handler, cfg->arg);
+    return s419_listener_add(cfg->port, cfg->name, cfg->handler, cfg->arg,
+                             cfg->stack_size);
 }
 
 const mp_xport_backend_t mp_xport_s419 = {

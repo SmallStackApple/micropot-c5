@@ -18,6 +18,7 @@
 #include "mp_s419_params.h"
 #include "mp_shell.h"
 #include "mp_ssh_behavior.h"
+#include "mp_sshd.h"
 #include "mp_telnet_behavior.h"
 
 /* Embedded page resources (see EMBED_TXTFILES in CMakeLists.txt). */
@@ -299,10 +300,27 @@ static const mp_telnet_behavior_t s_telnet = {
     .shell = &s_shell,
 };
 
-/* OpenSSH 7.9 ships with the distros that use the 4.19 kernel. */
+/* Banner-level fallback (kept for lightweight personas). */
 static const mp_ssh_behavior_t s_ssh = {
     .banner = "SSH-2.0-OpenSSH_7.9p1",
     .linger_ms = 4000,
+};
+
+/* Real SSH: wolfSSH completes the handshake and the shell runs over the
+ * SSH channel. Upstream 7.9p1 protocol id, generic (no distro suffix). */
+static const mp_shell_cfg_t s_shell_ssh = {
+    .fs = &mp_lfs_linux419,
+    .hostname = "linux",
+    .user = "root",
+    .proto = "ssh",
+};
+
+static const mp_sshd_behavior_t s_sshd = {
+    .proto_id = "SSH-2.0-OpenSSH_7.9p1",
+    .creds = s_creds,
+    .n_creds = sizeof(s_creds) / sizeof(s_creds[0]),
+    .shell = &s_shell_ssh,
+    .handshake_timeout_ms = 30000,
 };
 
 static const mp_brand_behavior_entry_t s_behaviors[] = {
@@ -310,6 +328,7 @@ static const mp_brand_behavior_entry_t s_behaviors[] = {
     { "http",     &s_http   },
     { "httpd",    &s_httpd  },
     { "ssh",      &s_ssh    },
+    { "sshd",     &s_sshd   },
     /* Drives the mp_stack419 engine when this persona runs on it: the
      * kernel personality (TTL, MSS, window, option layout, ISN, timers)
      * is data, not code. */

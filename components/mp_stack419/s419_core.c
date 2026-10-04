@@ -210,7 +210,8 @@ const s419_listener_t *s419_listener_find(uint16_t port)
 }
 
 esp_err_t s419_listener_add(uint16_t port, const char *name,
-                            mp_conn_handler_t handler, void *arg)
+                            mp_conn_handler_t handler, void *arg,
+                            uint16_t stack_size)
 {
     if (s_n_listeners >= S419_MAX_LISTENERS) {
         return ESP_ERR_NO_MEM;
@@ -223,6 +224,7 @@ esp_err_t s419_listener_add(uint16_t port, const char *name,
     l->name = name;
     l->handler = handler;
     l->arg = arg;
+    l->stack_size = stack_size;
     ESP_LOGI(TAG, "%s listening on port %u (stack419)", name, port);
     return ESP_OK;
 }

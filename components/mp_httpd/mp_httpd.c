@@ -554,6 +554,7 @@ static esp_err_t httpd_start(mp_service_t *svc)
     s_listener.name = "httpd";
     s_listener.handler = httpd_conn;
     s_listener.arg = svc;
+    s_listener.stack_size = 8192;
     return mp_xport_listen(&s_listener);
 }
 

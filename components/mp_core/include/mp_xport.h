@@ -71,6 +71,7 @@ typedef struct {
     const char       *name;  /* used for task naming / logs */
     mp_conn_handler_t handler;
     void             *arg;
+    uint16_t          stack_size; /* per-connection task stack; 0 = default */
 } mp_listener_cfg_t;
 
 typedef struct {
