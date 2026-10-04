@@ -13,12 +13,6 @@
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
-#include "esp_netif.h"
-#include "esp_netif_net_stack.h"
-#include "lwip/etharp.h"
-#include "lwip/tcpip.h"
-#include "lwip/ip_addr.h"
-#include "ping/ping_sock.h"
 #include "nvs_flash.h"
 
 #include "mp_core.h"
@@ -78,80 +72,18 @@ static void log_started_services(void)
     }
 }
 
-/* Decisive liveness probe: ping the gateway once per stats round. If this
- * keeps succeeding while the scanner loses us, the AP is blackholing the
- * scanner<->device direction; if it fails too, our own radio link wedged. */
-static volatile int s_gw_rtt_ms = -2; /* -2 never ran, -1 timeout, >=0 rtt */
-
-static void gw_ping_end(esp_ping_handle_t hdl, void *args)
-{
-    (void)args;
-    uint32_t rtt = 0, replied = 0;
-    esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &rtt, sizeof(rtt));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_REPLY, &replied, sizeof(replied));
-    s_gw_rtt_ms = replied ? (int)rtt : -1;
-}
-
-static void gw_ping_once(void)
-{
-    uint32_t gw = mp_net_get_gw();
-    if (!gw) {
-        return;
-    }
-    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
-    cfg.count = 1;
-    cfg.timeout_ms = 1000;
-    ip_addr_t target = { 0 };
-    target.type = IPADDR_TYPE_V4;
-    target.u_addr.ip4.addr = gw;
-    cfg.target_addr = target;
-    esp_ping_callbacks_t cbs = { .on_ping_end = gw_ping_end };
-    esp_ping_handle_t hdl;
-    if (esp_ping_new_session(&cfg, &cbs, &hdl) != ESP_OK) {
-        return;
-    }
-    esp_ping_start(hdl);
-    vTaskDelay(pdMS_TO_TICKS(1500));
-    esp_ping_stop(hdl);
-    esp_ping_delete_session(hdl);
-}
-
-/* ARP probe of the gateway — unlike the ICMP gwping (a phone AP may
- * silently drop echo requests), the gateway MUST answer ARP. Each round
- * checks the entry refreshed by the previous round's request, so a stable
- * entry proves our TX+RX both work at L2 even when the scanner sees
- * nothing. */
-static volatile int s_gw_arp = -2; /* -2 never ran, -1 no entry, 1 resolved */
-
-static void gw_arp_probe(void)
-{
-    uint32_t gw = mp_net_get_gw();
-    struct netif *netif = esp_netif_get_netif_impl(mp_net_netif());
-    if (!gw || !netif) {
-        return;
-    }
-    LOCK_TCPIP_CORE();
-    ip4_addr_t gw4 = { .addr = gw };
-    struct eth_addr *eth = NULL;
-    const ip4_addr_t *ip = NULL;
-    s_gw_arp = (etharp_find_addr(netif, &gw4, &eth, &ip) >= 0) ? 1 : -1;
-    etharp_request(netif, &gw4);  /* answer (if any) lands before next round */
-    etharp_gratuitous(netif);     /* keep the AP's STA entry hot */
-    UNLOCK_TCPIP_CORE();
-}
-
-/* Periodic health line: heap (internal min-ever catches slow leaks during
- * wolfSSH KEX), PSRAM (s419 rings), live session count, WiFi RSSI and the
- * age of the last inbound packet seen by the raw intercept — plus gateway
- * ARP/ICMP probes and a gratuitous ARP (phone hotspots age out quiet
- * clients aggressively). */
+/* Periodic health line, passive only: heap (internal min-ever catches slow
+ * leaks during wolfSSH KEX), PSRAM (s419 rings), live session count, WiFi
+ * RSSI, last-inbound-packet age and the tcpip-thread heartbeat. The
+ * honeypot must NOT emit periodic probe traffic (GARP/ping/ARP keepalives)
+ * that a real Linux host would never send — those were used to diagnose
+ * the phone-hotspot blackholing and were removed after it was confirmed
+ * AP-side. */
 static void stats_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(15000));
-        gw_arp_probe();
-        gw_ping_once();
+        vTaskDelay(pdMS_TO_TICKS(30000));
         int rssi = 0;
         wifi_ap_record_t ap = { 0 };
         if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
@@ -160,15 +92,15 @@ static void stats_task(void *arg)
         int64_t rx_age = mp_s419_rx_age_ms();
         static uint32_t s_prev_tick;
         uint32_t tick = mp_s419_tick_count();
-        uint32_t tick_delta = tick - s_prev_tick; /* ~1650/round when alive */
+        uint32_t tick_delta = tick - s_prev_tick; /* ~3000/round when alive */
         s_prev_tick = tick;
-        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u rssi %d rx_age %llds gwping %dms gwarp %d tick +%lu",
+        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u rssi %d rx_age %llds tick +%lu",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned)mp_xport_active(), rssi,
-                 (long long)(rx_age < 0 ? -1 : rx_age / 1000), s_gw_rtt_ms,
-                 s_gw_arp, (unsigned long)tick_delta);
+                 (long long)(rx_age < 0 ? -1 : rx_age / 1000),
+                 (unsigned long)tick_delta);
     }
 }
 
