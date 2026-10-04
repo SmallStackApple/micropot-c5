@@ -39,6 +39,18 @@ static void send_synack(s419_tcb *tcb)
     size_t n = s419_build_synack(pkt, s419_par, tcb->lip, tcb->rip,
                                  tcb->lport, tcb->rport, tcb->iss,
                                  tcb->rcv_nxt, tcb->ecn);
+    {
+        static bool first = true;
+        if (first) {
+            first = false;
+            ESP_LOGW(TAG, "sending SYN-ACK: %08lx:%u -> %08lx:%u seq=%08lx "
+                     "ack=%08lx len=%u ttl=%u wnd=%u",
+                     (unsigned long)tcb->lip, tcb->lport,
+                     (unsigned long)tcb->rip, tcb->rport,
+                     (unsigned long)tcb->iss, (unsigned long)tcb->rcv_nxt,
+                     (unsigned)n, s419_par->ttl, s419_par->rcv_wnd);
+        }
+    }
     s419_output(pkt, n, tcb->rip);
 }
 
