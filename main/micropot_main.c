@@ -16,6 +16,7 @@
 #include "esp_netif.h"
 #include "esp_netif_net_stack.h"
 #include "lwip/etharp.h"
+#include "lwip/tcpip.h"
 #include "lwip/ip_addr.h"
 #include "ping/ping_sock.h"
 #include "nvs_flash.h"
@@ -115,16 +116,41 @@ static void gw_ping_once(void)
     esp_ping_delete_session(hdl);
 }
 
+/* ARP probe of the gateway — unlike the ICMP gwping (a phone AP may
+ * silently drop echo requests), the gateway MUST answer ARP. Each round
+ * checks the entry refreshed by the previous round's request, so a stable
+ * entry proves our TX+RX both work at L2 even when the scanner sees
+ * nothing. */
+static volatile int s_gw_arp = -2; /* -2 never ran, -1 no entry, 1 resolved */
+
+static void gw_arp_probe(void)
+{
+    uint32_t gw = mp_net_get_gw();
+    struct netif *netif = esp_netif_get_netif_impl(mp_net_netif());
+    if (!gw || !netif) {
+        return;
+    }
+    LOCK_TCPIP_CORE();
+    ip4_addr_t gw4 = { .addr = gw };
+    struct eth_addr *eth = NULL;
+    const ip4_addr_t *ip = NULL;
+    s_gw_arp = (etharp_find_addr(netif, &gw4, &eth, &ip) >= 0) ? 1 : -1;
+    etharp_request(netif, &gw4);  /* answer (if any) lands before next round */
+    etharp_gratuitous(netif);     /* keep the AP's STA entry hot */
+    UNLOCK_TCPIP_CORE();
+}
+
 /* Periodic health line: heap (internal min-ever catches slow leaks during
  * wolfSSH KEX), PSRAM (s419 rings), live session count, WiFi RSSI and the
- * age of the last inbound packet seen by the raw intercept — plus a
- * gratuitous ARP to keep the AP's STA entry hot (phone hotspots age out
- * quiet clients aggressively). */
+ * age of the last inbound packet seen by the raw intercept — plus gateway
+ * ARP/ICMP probes and a gratuitous ARP (phone hotspots age out quiet
+ * clients aggressively). */
 static void stats_task(void *arg)
 {
     (void)arg;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(15000));
+        gw_arp_probe();
         gw_ping_once();
         int rssi = 0;
         wifi_ap_record_t ap = { 0 };
@@ -136,17 +162,13 @@ static void stats_task(void *arg)
         uint32_t tick = mp_s419_tick_count();
         uint32_t tick_delta = tick - s_prev_tick; /* ~1650/round when alive */
         s_prev_tick = tick;
-        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u rssi %d rx_age %llds gwping %dms tick +%lu",
+        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u rssi %d rx_age %llds gwping %dms gwarp %d tick +%lu",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned)mp_xport_active(), rssi,
                  (long long)(rx_age < 0 ? -1 : rx_age / 1000), s_gw_rtt_ms,
-                 (unsigned long)tick_delta);
-        struct netif *netif = esp_netif_get_netif_impl(mp_net_netif());
-        if (netif) {
-            etharp_gratuitous(netif);
-        }
+                 s_gw_arp, (unsigned long)tick_delta);
     }
 }
 
