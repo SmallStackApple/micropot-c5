@@ -123,6 +123,12 @@ static void telnet_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
         goto done;
     }
 
+    /* brand-provided interactive shell (Linux persona) takes over */
+    if (b->shell) {
+        reason = b->shell(conn, sess, b->shell_ctx, user);
+        goto done;
+    }
+
     reason = "closed";
     char cmd[128];
     for (;;) {

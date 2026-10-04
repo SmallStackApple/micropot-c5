@@ -6,6 +6,7 @@
 #include "mp_brand.h"
 #include "mp_linekit.h"
 #include "mp_session.h"
+#include "mp_xport.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,6 +31,12 @@ typedef struct {
     /* Optional dynamic hook. NULL => pure data-table driven matching. */
     const char *(*exec)(const mp_session_t *s, const char *cmdline,
                         char *out, size_t out_len);
+    /* Optional full-session shell: when set, the post-login interactive
+     * loop is delegated to the brand (e.g. mp_linuxsh). The hook logs
+     * commands itself and returns the disconnect reason string. */
+    const char *(*shell)(mp_conn_t *conn, const mp_session_t *sess,
+                         const void *ctx, const char *user);
+    const void *shell_ctx;
 } mp_telnet_behavior_t;
 
 #ifdef __cplusplus
