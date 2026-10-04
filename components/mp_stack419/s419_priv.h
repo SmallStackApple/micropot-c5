@@ -24,7 +24,7 @@
 
 #define S419_RX_CAP        4096
 #define S419_TX_CAP        16384
-#define S419_MAX_LISTENERS 8
+#define S419_MAX_LISTENERS 12
 #define S419_SYNRECV_CAP   32
 #define S419_MAX_PKT       1600
 

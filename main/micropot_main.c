@@ -18,6 +18,7 @@
 #include "mp_brand_linux419.h"
 #include "mp_brand_printer.h"
 #include "mp_brand_router.h"
+#include "mp_ftpd.h"
 #include "mp_http.h"
 #include "mp_httpd.h"
 #include "mp_log.h"
@@ -118,6 +119,7 @@ void app_main(void)
     mp_registry_register(mp_httpd_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));
     mp_registry_register(mp_ssh_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
     mp_registry_register(mp_sshd_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
+    mp_registry_register(mp_ftpd_get_ops(), mp_bind_any(CONFIG_MICROPOT_FTP_PORT));
 
     char ip[16] = "0.0.0.0";
     char gw[16] = "0.0.0.0";

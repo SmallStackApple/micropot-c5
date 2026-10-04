@@ -10,6 +10,7 @@ idf_component_register(
         mp_httpd
         mp_ssh
         mp_sshd
+        mp_ftpd
         mp_brand_hikvision
         mp_brand_router
         mp_brand_printer

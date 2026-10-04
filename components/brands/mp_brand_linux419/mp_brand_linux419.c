@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "mp_brand_linux419.h"
+#include "mp_ftpd_behavior.h"
 #include "mp_http_behavior.h"
 #include "mp_httpd_behavior.h"
 #include "mp_linuxsh.h"
@@ -126,12 +127,22 @@ static mp_sshd_behavior_t s_sshd = {
     .shell_ctx = &mp_linux419_shell_cfg,
 };
 
+/* vsftpd 3.0.3 over the same fake filesystem (read-only). */
+static mp_ftpd_behavior_t s_ftpd = {
+    .version = "3.0.3",
+    .creds = s_creds,
+    .n_creds = sizeof(s_creds) / sizeof(s_creds[0]),
+    .fs = mp_linux419_fs,
+    .max_clients = 32,
+};
+
 static const mp_brand_behavior_entry_t s_behaviors[] = {
     { "telnet",   &s_telnet   },
     { "http",     &s_http     },
     { "httpd",    &s_httpd    },
     { "ssh",      &s_ssh      },
     { "sshd",     &s_sshd     },
+    { "ftpd",     &s_ftpd     },
     /* Linux 4.19 TCP/IP wire personality for the stack419 engine */
     { "stack419", &mp_s419_params_linux419 },
     { NULL, NULL },
@@ -144,6 +155,7 @@ static esp_err_t linux419_init(const mp_brand_t *self)
         (uint32_t)(ssh_host_rsa_key_end - ssh_host_rsa_key_start);
     s_sshd.key_ecdsa_len =
         (uint32_t)(ssh_host_ecdsa_key_end - ssh_host_ecdsa_key_start);
+    s_ftpd.fs_n = mp_linux419_fs_n;
     return ESP_OK;
 }
 

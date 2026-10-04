@@ -37,9 +37,8 @@ static const mp_persona_t s_personas[] = {
         .id = "linux-419",
         .brand_id = "linux_419",
         .bind = { .vaddr = 0, .port = 0 },
-        /* ftpd joins in the last step. */
-        .services = { "telnet", "httpd", "sshd" },
-        .n_services = 3,
+        .services = { "telnet", "httpd", "sshd", "ftpd" },
+        .n_services = 4,
         .hostname = "linux",
         .transport = "s419",
     },
