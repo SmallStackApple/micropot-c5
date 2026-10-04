@@ -73,7 +73,10 @@ uint16_t s419_icmp_ipid(void)
 void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_host)
 {
     static int64_t s_last_err_ms;
-    struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_RAM);
+    /* PBUF_LINK reserves the L2 header headroom that netif->output()
+     * (ethernet_output) prepends; a PBUF_RAW pbuf has none and every send
+     * would fail with ERR_BUF while the IP header itself is correct. */
+    struct pbuf *p = pbuf_alloc(PBUF_LINK, (u16_t)len, PBUF_RAM);
     if (!p) {
         ESP_LOGW(TAG, "tx: pbuf alloc failed (%u)", (unsigned)len);
         return;
