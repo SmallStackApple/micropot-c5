@@ -37,10 +37,10 @@ static const mp_persona_t s_personas[] = {
         .id = "linux-419",
         .brand_id = "linux_419",
         .bind = { .vaddr = 0, .port = 0 },
-        /* http joins once the Apache-style mp_httpd lands (esp_http_server
-         * is bound to lwIP sockets and cannot run on the 4.19 stack). */
-        .services = { "telnet", "ssh" },
-        .n_services = 2,
+        /* sshd (real OpenSSH 7.9p1 KEX) replaces the banner service once
+         * wolfSSH lands; ftpd joins in the last step. */
+        .services = { "telnet", "httpd", "ssh" },
+        .n_services = 3,
         .hostname = "linux",
         .transport = "s419",
     },

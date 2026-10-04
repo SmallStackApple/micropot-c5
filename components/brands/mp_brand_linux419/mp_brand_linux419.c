@@ -12,6 +12,7 @@
 
 #include "mp_brand_linux419.h"
 #include "mp_http_behavior.h"
+#include "mp_httpd_behavior.h"
 #include "mp_net.h"
 #include "mp_s419_params.h"
 #include "mp_ssh_behavior.h"
@@ -169,6 +170,24 @@ static const mp_cmd_t s_cmds[] = {
 
 /* ------------------------------------------------------------- HTTP pages */
 
+/* Apache upstream default index (docs/docroot/index.html): a fresh install
+ * with no site deployed yet. Distro-branded pages are avoided on purpose. */
+static const char s_index_html[] =
+    "<html><body><h1>It works!</h1></body></html>\n";
+
+static const mp_httpd_route_t s_httpd_routes[] = {
+    { "/",           "text/html; charset=UTF-8", s_index_html, 0 },
+    { "/index.html", "text/html; charset=UTF-8", s_index_html, 0 },
+};
+
+static const mp_httpd_behavior_t s_httpd = {
+    .server_hdr = "Apache/2.4.38",
+    .server_name = "linux",
+    .realm = NULL, /* default vhost: no auth, "It works!" + Apache 404s */
+    .routes = s_httpd_routes,
+    .n_routes = sizeof(s_httpd_routes) / sizeof(s_httpd_routes[0]),
+};
+
 static const mp_http_behavior_t s_http = {
     .server_hdr = "Apache/2.4.38",
     .realm = "Restricted Area",
@@ -281,6 +300,7 @@ static const mp_ssh_behavior_t s_ssh = {
 static const mp_brand_behavior_entry_t s_behaviors[] = {
     { "telnet",   &s_telnet   },
     { "http",     &s_http     },
+    { "httpd",    &s_httpd    },
     { "ssh",      &s_ssh      },
     /* Linux 4.19 TCP/IP wire personality for the stack419 engine */
     { "stack419", &mp_s419_params_linux419 },

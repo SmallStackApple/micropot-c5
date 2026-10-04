@@ -7,6 +7,7 @@ idf_component_register(
         mp_net
         mp_telnet
         mp_http
+        mp_httpd
         mp_ssh
         mp_brand_hikvision
         mp_brand_router
