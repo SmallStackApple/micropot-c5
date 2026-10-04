@@ -13,8 +13,10 @@
 #include "mp_brand_linux419.h"
 #include "mp_http_behavior.h"
 #include "mp_httpd_behavior.h"
+#include "mp_linuxfs.h"
 #include "mp_net.h"
 #include "mp_s419_params.h"
+#include "mp_shell.h"
 #include "mp_ssh_behavior.h"
 #include "mp_telnet_behavior.h"
 
@@ -273,6 +275,14 @@ static const char *linux_exec(const mp_session_t *s, const char *cmdline,
     return NULL;
 }
 
+/* bash-style shell over the persona's fake filesystem */
+static const mp_shell_cfg_t s_shell = {
+    .fs = &mp_lfs_linux419,
+    .hostname = "linux",
+    .user = "root",
+    .proto = "telnet",
+};
+
 static const mp_telnet_behavior_t s_telnet = {
     .banner = "Linux 4.19\r\n"
               "Welcome to the Linux 4.19 server",
@@ -286,6 +296,7 @@ static const mp_telnet_behavior_t s_telnet = {
     .cmds = s_cmds,
     .n_cmds = sizeof(s_cmds) / sizeof(s_cmds[0]),
     .exec = linux_exec,
+    .shell = &s_shell,
 };
 
 /* OpenSSH 7.9 ships with the distros that use the 4.19 kernel. */

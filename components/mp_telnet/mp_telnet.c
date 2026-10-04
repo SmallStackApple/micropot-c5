@@ -27,6 +27,13 @@ static const char *TAG = "mp_telnet";
 
 static mp_listener_cfg_t s_listener;
 
+static void telnet_cmd_evt(const mp_session_t *s, const char *proto,
+                           const char *cmd)
+{
+    (void)proto; /* the telnet service always logs under "telnet" */
+    mp_log_telnet_command(s, cmd);
+}
+
 /* --------------------------------------------------------- session logic */
 
 static bool is_exit_cmd(const char *cmd)
@@ -120,6 +127,27 @@ static void telnet_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
 
     if (!authed) {
         reason = "auth_failed";
+        goto done;
+    }
+
+    /* Preferred path: a real shell interpreter over the persona's fake
+     * filesystem (mp_shell), used by the generic Linux persona. */
+    if (b->shell) {
+        mp_shell_cfg_t sc = *b->shell;
+        if (!sc.on_cmd) {
+            sc.on_cmd = telnet_cmd_evt;
+        }
+        mp_shell_exit_t r = mp_shell_run(conn, &sc, sess);
+        switch (r) {
+        case MP_SHELL_LOGOUT:  reason = "logout"; break;
+        case MP_SHELL_REBOOT:
+            vTaskDelay(pdMS_TO_TICKS(REBOOT_LINGER_MS));
+            reason = "reboot";
+            break;
+        case MP_SHELL_TIMEOUT: reason = "timeout"; break;
+        case MP_SHELL_ERROR:   reason = "send_error"; break;
+        default:               reason = "closed"; break;
+        }
         goto done;
     }
 
