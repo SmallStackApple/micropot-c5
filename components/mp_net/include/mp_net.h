@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "esp_err.h"
+#include "esp_netif.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,6 +27,9 @@ esp_err_t mp_net_wait_connected(uint32_t timeout_ms);
 
 /** Device IPv4 in network byte order (0 before connect). */
 uint32_t mp_net_get_ip(void);
+
+/** STA netif handle (lwIP), for ARP keepalives and link diagnostics. */
+esp_netif_t *mp_net_netif(void);
 
 /** Active station MAC (post-spoofing). Brands use this to keep canned
  *  command output (e.g. ifconfig HWaddr) consistent with the wire. */

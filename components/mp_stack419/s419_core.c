@@ -49,6 +49,12 @@ static s419_tcb       *s_tcbs;
 static uint16_t        s_synrecv_count;
 static uint16_t        s_icmp_id;
 static int64_t         s_last_flood_evt_ms;
+static int64_t         s_last_rx_ms = -1; /* any inbound IPv4, diagnostics */
+
+int64_t mp_s419_rx_age_ms(void)
+{
+    return s_last_rx_ms < 0 ? -1 : s419_now_ms() - s_last_rx_ms;
+}
 
 int64_t s419_now_ms(void)
 {
@@ -242,6 +248,7 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (p->tot_len < S419_IP_HLEN + S419_TCP_HLEN) {
         return 0;
     }
+    s_last_rx_ms = s419_now_ms();
     size_t ihl = (ip[0] & 0x0f) * 4;
     uint32_t ip_src = s419_rd32(ip + 12);
     uint32_t ip_dst = s419_rd32(ip + 16);
@@ -303,6 +310,7 @@ static u8_t on_udp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (p->tot_len < S419_IP_HLEN + 8) {
         return 0;
     }
+    s_last_rx_ms = s419_now_ms();
     size_t ihl = (ip[0] & 0x0f) * 4;
     uint32_t ip_dst = s419_rd32(ip + 16);
     if (!for_us(ip_dst)) {
@@ -331,6 +339,7 @@ static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (p->tot_len < S419_IP_HLEN + 8) {
         return 0;
     }
+    s_last_rx_ms = s419_now_ms();
     size_t ihl = (ip[0] & 0x0f) * 4;
     uint32_t ip_dst = s419_rd32(ip + 16);
     if (!for_us(ip_dst)) {

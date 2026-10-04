@@ -12,6 +12,10 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
+#include "esp_netif_net_stack.h"
+#include "lwip/etharp.h"
 #include "nvs_flash.h"
 
 #include "mp_core.h"
@@ -72,17 +76,31 @@ static void log_started_services(void)
 }
 
 /* Periodic health line: heap (internal min-ever catches slow leaks during
- * wolfSSH KEX), PSRAM (s419 rings), and the live session count. */
+ * wolfSSH KEX), PSRAM (s419 rings), live session count, WiFi RSSI and the
+ * age of the last inbound packet seen by the raw intercept — plus a
+ * gratuitous ARP to keep the AP's STA entry hot (phone hotspots age out
+ * quiet clients aggressively). */
 static void stats_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(30000));
-        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u",
+        vTaskDelay(pdMS_TO_TICKS(15000));
+        int rssi = 0;
+        wifi_ap_record_t ap = { 0 };
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            rssi = ap.rssi;
+        }
+        int64_t rx_age = mp_s419_rx_age_ms();
+        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u rssi %d rx_age %llds",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                 (unsigned)mp_xport_active());
+                 (unsigned)mp_xport_active(), rssi,
+                 (long long)(rx_age < 0 ? -1 : rx_age / 1000));
+        struct netif *netif = esp_netif_get_netif_impl(mp_net_netif());
+        if (netif) {
+            etharp_gratuitous(netif);
+        }
     }
 }
 

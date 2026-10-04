@@ -202,6 +202,11 @@ uint32_t mp_net_get_ip(void)
     return s_ip;
 }
 
+esp_netif_t *mp_net_netif(void)
+{
+    return s_sta_netif;
+}
+
 void mp_net_get_mac(uint8_t out[6])
 {
     if (out) {
