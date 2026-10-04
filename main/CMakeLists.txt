@@ -11,5 +11,6 @@ idf_component_register(
         mp_brand_hikvision
         mp_brand_router
         mp_brand_printer
+        mp_brand_linux419
         nvs_flash
 )

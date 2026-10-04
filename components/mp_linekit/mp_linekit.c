@@ -1,7 +1,4 @@
-#include <errno.h>
 #include <string.h>
-
-#include "lwip/sockets.h"
 
 #include "mp_linekit.h"
 
@@ -9,69 +6,56 @@
 #define TELNET_SB  250
 #define TELNET_SE  240
 
-/* POSIX raises SIGPIPE when writing to a closed peer; lwIP just returns an
- * error. Ask for the error so the honeypot task survives rude clients. */
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
-
-int mp_send_all(int sock, const void *buf, size_t len)
+int mp_send_all(mp_conn_t *conn, const void *buf, size_t len)
 {
-    const char *p = (const char *)buf;
-    size_t sent = 0;
-    while (sent < len) {
-        int r = send(sock, p + sent, len - sent, MSG_NOSIGNAL);
-        if (r <= 0) {
-            return -1;
-        }
-        sent += (size_t)r;
-    }
-    return 0;
+    return mp_conn_send(conn, buf, len);
 }
 
-int mp_send_str(int sock, const char *str)
+int mp_send_str(mp_conn_t *conn, const char *str)
 {
     if (!str) {
         return 0;
     }
-    return mp_send_all(sock, str, strlen(str));
+    return mp_send_all(conn, str, strlen(str));
 }
 
-static void echo_char(int sock, char c)
+static void echo_char(mp_conn_t *conn, char c)
 {
-    send(sock, &c, 1, 0);
+    mp_conn_send(conn, &c, 1);
 }
 
-int mp_line_read(int sock, char *buf, size_t cap, int timeout_ms,
+/* Read a single byte with the line timeout applied to every call.
+ * @return 1 ok, 0 peer closed, -1 aborted, -2 timeout. */
+static int read_char(mp_conn_t *conn, unsigned char *c, int timeout_ms)
+{
+    int r = mp_conn_recv(conn, c, 1, (uint32_t)timeout_ms);
+    if (r == 1) {
+        return 1;
+    }
+    if (r == 0) {
+        return 0;
+    }
+    return (r == MP_CONN_TIMEOUT) ? -2 : -1;
+}
+
+int mp_line_read(mp_conn_t *conn, char *buf, size_t cap, int timeout_ms,
                  bool strip_iac, mp_line_echo_t echo)
 {
-    struct timeval tv = {
-        .tv_sec = timeout_ms / 1000,
-        .tv_usec = (timeout_ms % 1000) * 1000,
-    };
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
     size_t len = 0;
     for (;;) {
         unsigned char c;
-        int r = recv(sock, &c, 1, 0);
-        if (r == 0) {
-            return -1;
-        }
-        if (r < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                return -2;
-            }
-            return -1;
+        int r = read_char(conn, &c, timeout_ms);
+        if (r <= 0) {
+            return r == -2 ? -2 : -1;
         }
         if (strip_iac && c == TELNET_IAC) {
             unsigned char cmd = 0;
-            if (recv(sock, &cmd, 1, 0) <= 0) {
+            if (read_char(conn, &cmd, timeout_ms) <= 0) {
                 return -1;
             }
             if (cmd == TELNET_SB) {
                 unsigned char prev = 0, b;
-                while (recv(sock, &b, 1, 0) == 1) {
+                while (read_char(conn, &b, timeout_ms) == 1) {
                     if (prev == TELNET_IAC && b == TELNET_SE) {
                         break;
                     }
@@ -79,7 +63,7 @@ int mp_line_read(int sock, char *buf, size_t cap, int timeout_ms,
                 }
             } else if (cmd >= 251 && cmd <= 254) {
                 unsigned char opt;
-                recv(sock, &opt, 1, 0);
+                read_char(conn, &opt, timeout_ms);
             }
             continue;
         }
@@ -88,7 +72,7 @@ int mp_line_read(int sock, char *buf, size_t cap, int timeout_ms,
         }
         if (c == '\n') {
             if (echo == MP_LINE_ECHO_ON) {
-                mp_send_all(sock, "\r\n", 2);
+                mp_send_all(conn, "\r\n", 2);
             }
             buf[len] = '\0';
             return (int)len;
@@ -97,7 +81,7 @@ int mp_line_read(int sock, char *buf, size_t cap, int timeout_ms,
             if (len) {
                 len--;
                 if (echo == MP_LINE_ECHO_ON) {
-                    mp_send_all(sock, "\b \b", 3);
+                    mp_send_all(conn, "\b \b", 3);
                 }
             }
             continue;
@@ -105,7 +89,7 @@ int mp_line_read(int sock, char *buf, size_t cap, int timeout_ms,
         if (len + 1 < cap) {
             buf[len++] = (char)c;
             if (echo == MP_LINE_ECHO_ON) {
-                echo_char(sock, (char)c);
+                echo_char(conn, (char)c);
             }
         }
     }

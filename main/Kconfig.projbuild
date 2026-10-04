@@ -68,6 +68,8 @@ menu "MicroPot-C5 honeypot"
                 bool "TP-LINK-style home router"
             config MICROPOT_PERSONA_PRINTER
                 bool "HP LaserJet-style network printer"
+            config MICROPOT_PERSONA_LINUX419
+                bool "Generic Linux 4.19 server (OpenSSH/Apache/root shell)"
         endchoice
     endmenu
 

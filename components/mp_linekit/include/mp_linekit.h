@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "mp_xport.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -14,7 +16,7 @@ extern "C" {
  * Shared building blocks for text protocols that read newline-terminated
  * input and reply from a canned command table (Telnet today, FTP/SMTP/
  * Redis-style services later). Services provide the brand table; linekit
- * provides the socket mechanics.
+ * provides the connection mechanics on top of mp_xport.
  * ---------------------------------------------------------------------- */
 
 /** One canned command reply: exact match first, prefix match second. */
@@ -29,22 +31,21 @@ typedef enum {
 } mp_line_echo_t;
 
 /** Send the whole buffer; @return 0 on success, -1 on error/close. */
-int mp_send_all(int sock, const void *buf, size_t len);
+int mp_send_all(mp_conn_t *conn, const void *buf, size_t len);
 
 /** Send a NUL-terminated string (NULL is a no-op). */
-int mp_send_str(int sock, const char *str);
+int mp_send_str(mp_conn_t *conn, const char *str);
 
 /**
  * Read one newline-terminated line.
  *
  * - strips Telnet IAC negotiation sequences when @p strip_iac
- * - '\\r' and NUL bytes are ignored; backspace/DEL erase one char
+ * - '\r' and NUL bytes are ignored; backspace/DEL erase one char
  * - with MP_LINE_ECHO_ON the peer sees its own input (busybox style)
- * - sets SO_RCVTIMEO to @p timeout_ms for the duration of the call
  *
  * @return line length (>= 0), -1 on close/error, -2 on timeout.
  */
-int mp_line_read(int sock, char *buf, size_t cap, int timeout_ms,
+int mp_line_read(mp_conn_t *conn, char *buf, size_t cap, int timeout_ms,
                  bool strip_iac, mp_line_echo_t echo);
 
 /**

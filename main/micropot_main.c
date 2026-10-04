@@ -13,6 +13,7 @@
 
 #include "mp_core.h"
 #include "mp_brand_hikvision.h"
+#include "mp_brand_linux419.h"
 #include "mp_brand_printer.h"
 #include "mp_brand_router.h"
 #include "mp_http.h"
@@ -38,6 +39,7 @@ static const mp_brand_t *select_brand(const mp_persona_t *persona)
     mp_brand_register(&mp_brand_hikvision);
     mp_brand_register(&mp_brand_router);
     mp_brand_register(&mp_brand_printer);
+    mp_brand_register(&mp_brand_linux419);
     return mp_brand_find(persona->brand_id);
 }
 
@@ -88,7 +90,7 @@ void app_main(void)
     ESP_ERROR_CHECK(mp_net_init(brand->meta->mac_oui, persona->hostname));
 
     ESP_ERROR_CHECK(mp_log_init());
-    mp_tcp_listener_set_overload_hook(on_session_overload);
+    mp_xport_set_overload_hook(on_session_overload);
 
     mp_registry_register(mp_telnet_get_ops(), mp_bind_any(CONFIG_MICROPOT_TELNET_PORT));
     mp_registry_register(mp_http_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));

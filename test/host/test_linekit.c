@@ -1,17 +1,64 @@
 /* Host tests for linekit (components/mp_linekit/mp_linekit.c), exercising
  * mp_line_read over a real socketpair: echo, backspace, IAC stripping,
- * timeout. */
+ * timeout. The socketpair is wrapped in an fd-backed mp_conn shim, the
+ * same contract the lwIP backend implements on target. */
+#include <errno.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "test_util.h"
 
 #include "mp_linekit.h"
 
+static int shim_recv(mp_conn_t *c, void *buf, size_t len, uint32_t timeout_ms)
+{
+    int fd = (int)(intptr_t)c->ctx;
+    struct timeval tv = {
+        .tv_sec = (time_t)(timeout_ms / 1000),
+        .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000,
+    };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    ssize_t r = recv(fd, buf, len, 0);
+    if (r > 0) {
+        return (int)r;
+    }
+    if (r == 0) {
+        return 0;
+    }
+    return (errno == EAGAIN || errno == EWOULDBLOCK) ? MP_CONN_TIMEOUT
+                                                     : MP_CONN_ABORTED;
+}
+
+static int shim_send(mp_conn_t *c, const void *buf, size_t len)
+{
+    int fd = (int)(intptr_t)c->ctx;
+    return send(fd, buf, len, MSG_NOSIGNAL) == (ssize_t)len ? 0 : -1;
+}
+
+static void shim_release(mp_conn_t *c)
+{
+    close((int)(intptr_t)c->ctx);
+}
+
+static const mp_conn_ops_t s_shim_ops = {
+    .recv = shim_recv,
+    .send = shim_send,
+    .shutdown = NULL,
+    .release = shim_release,
+};
+
+static mp_conn_t s_conn;
+
 static int make_pair(int fds[2])
 {
-    return socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+    int r = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+    s_conn.ops = &s_shim_ops;
+    s_conn.ctx = (void *)(intptr_t)fds[0];
+    return r;
 }
+
+#define CONN (&s_conn)
 
 static void test_cmd_lookup(void)
 {
@@ -40,7 +87,7 @@ static void test_read_plain_no_echo(void)
     write(fds[1], "admin\r\n", 7);
 
     char buf[32];
-    int n = mp_line_read(fds[0], buf, sizeof(buf), 1000, false, MP_LINE_ECHO_OFF);
+    int n = mp_line_read(CONN, buf, sizeof(buf), 1000, false, MP_LINE_ECHO_OFF);
     CHECK(n == 5);
     CHECK_STR(buf, "admin");
 
@@ -57,7 +104,7 @@ static void test_read_echo_and_backspace(void)
     write(fds[1], "idx\x7f\n", 5); /* 'i','d','x',DEL,NL -> "id" */
 
     char buf[32];
-    int n = mp_line_read(fds[0], buf, sizeof(buf), 1000, false, MP_LINE_ECHO_ON);
+    int n = mp_line_read(CONN, buf, sizeof(buf), 1000, false, MP_LINE_ECHO_ON);
     CHECK(n == 2);
     CHECK_STR(buf, "id");
 
@@ -81,7 +128,7 @@ static void test_read_strips_iac(void)
     write(fds[1], stream, sizeof(stream));
 
     char buf[32];
-    int n = mp_line_read(fds[0], buf, sizeof(buf), 1000, true, MP_LINE_ECHO_OFF);
+    int n = mp_line_read(CONN, buf, sizeof(buf), 1000, true, MP_LINE_ECHO_OFF);
     CHECK(n == 2);
     CHECK_STR(buf, "id");
     close(fds[0]); close(fds[1]);
@@ -93,11 +140,11 @@ static void test_read_timeout_and_close(void)
     CHECK(make_pair(fds) == 0);
 
     char buf[32];
-    int n = mp_line_read(fds[0], buf, sizeof(buf), 100, false, MP_LINE_ECHO_OFF);
+    int n = mp_line_read(CONN, buf, sizeof(buf), 100, false, MP_LINE_ECHO_OFF);
     CHECK(n == -2); /* timed out */
 
     close(fds[1]);
-    n = mp_line_read(fds[0], buf, sizeof(buf), 1000, false, MP_LINE_ECHO_OFF);
+    n = mp_line_read(CONN, buf, sizeof(buf), 1000, false, MP_LINE_ECHO_OFF);
     CHECK(n == -1); /* peer closed */
     close(fds[0]);
 }
@@ -106,13 +153,13 @@ static void test_send_all(void)
 {
     int fds[2];
     CHECK(make_pair(fds) == 0);
-    CHECK(mp_send_str(fds[0], "hello") == 0);
-    CHECK(mp_send_str(fds[0], NULL) == 0); /* no-op */
+    CHECK(mp_send_str(CONN, "hello") == 0);
+    CHECK(mp_send_str(CONN, NULL) == 0); /* no-op */
     char buf[8] = { 0 };
     CHECK(recv(fds[1], buf, sizeof(buf), 0) == 5);
     CHECK_STR(buf, "hello");
     close(fds[1]);
-    CHECK(mp_send_str(fds[0], "x") == -1); /* peer gone */
+    CHECK(mp_send_str(CONN, "x") == -1); /* peer gone */
     close(fds[0]);
 }
 

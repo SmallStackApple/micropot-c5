@@ -170,12 +170,35 @@ hostname comes from `mp_persona_t.hostname` via `esp_netif_set_hostname()`.
 | `hikvision_ipcam` | `44:19:B6` | Hangzhou Hikvision | IPCAM-01 |
 | `tplink_router`   | `00:1D:0F` | TP-Link Technologies | TP-LINK_WR841N |
 | `hp_printer`      | `00:01:E6` | Hewlett Packard | HP-LaserJet-M428 |
+| `linux_419`       | `52:54:00` | QEMU/KVM virtual NIC | linux |
 
 To advertise a different vendor, just edit the brand's `mac_oui` (the first
 byte must have bit 0 clear, i.e. an even first octet). Other examples:
 `00:00:48` Seiko Epson, `00:00:85` Canon, `00:00:39` Toshiba, `00:00:01` Xerox.
 
 > Only use this on your own isolated lab network.
+
+## Linux 4.19 simulation persona
+
+A fourth persona emulates a plain x86_64 Linux 4.19 server:
+
+- brand `linux_419`, persona `linux-419` (hostname `linux`), services
+  `telnet` + `http` + `ssh`.
+- SSH advertises `SSH-2.0-OpenSSH_7.9p1`; HTTP advertises
+  `Server: Apache/2.4.38`; the root shell reports
+  `Linux linux 4.19.0 #1 SMP x86_64 GNU/Linux` and generates live
+  `ifconfig` / `ip` / `route` output from the device's real IP and MAC.
+- Select it in `menuconfig` → *MicroPot-C5 honeypot* → *Device persona* →
+  *Generic Linux 4.19 server*, or set `CONFIG_MICROPOT_PERSONA_LINUX419=y`.
+
+`nmap -O` OS detection is approximated, not spoofed: `sdkconfig.defaults`
+tunes the lwIP values that influence the fingerprint
+(`CONFIG_LWIP_IP_DEFAULT_TTL=64`, `CONFIG_LWIP_TCP_MSS=1460`,
+`CONFIG_LWIP_TCP_WND_DEFAULT=64240`, `CONFIG_LWIP_TCP_MSL=60000`) to match the
+`Fingerprint Linux 4.19` record in `nmap-os-db`. TCP option order, timestamps,
+ECN and window scaling are not exposed by ESP-IDF's lwIP, so an exact match is
+not guaranteed. Run `tools/fingerprint_check.sh <device-ip>` to see what nmap
+reports.
 
 ## Testing & regression
 

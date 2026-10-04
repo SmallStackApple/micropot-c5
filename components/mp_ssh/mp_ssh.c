@@ -27,9 +27,9 @@ static const char *TAG = "mp_ssh";
 #define SSH_DEFAULT_LINGER_MS 5000
 #define SSH_CLIENT_BANNER_MAX 255 /* RFC 4253 §4.2 */
 
-static mp_tcp_listener_cfg_t s_listener;
+static mp_listener_cfg_t s_listener;
 
-static void ssh_conn(int sock, const mp_session_t *sess, void *arg)
+static void ssh_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
 {
     mp_service_t *svc = (mp_service_t *)arg;
     const mp_ssh_behavior_t *b =
@@ -44,14 +44,14 @@ static void ssh_conn(int sock, const mp_session_t *sess, void *arg)
     mp_evt_send(&e);
 
     const char *reason = "closed";
-    if (mp_send_str(sock, b->banner) < 0 || mp_send_str(sock, "\r\n") < 0) {
+    if (mp_send_str(conn, b->banner) < 0 || mp_send_str(conn, "\r\n") < 0) {
         reason = "send_error";
         goto done;
     }
 
     /* harvest the client's version string */
     char client[SSH_CLIENT_BANNER_MAX + 1];
-    int n = mp_line_read(sock, client, sizeof(client), SSH_BANNER_TIMEOUT_MS,
+    int n = mp_line_read(conn, client, sizeof(client), SSH_BANNER_TIMEOUT_MS,
                          false, MP_LINE_ECHO_OFF);
     if (n >= 0) {
         mp_evt_begin(&e, sess, "ssh", "ssh.banner");
@@ -90,7 +90,7 @@ static esp_err_t ssh_start(mp_service_t *svc)
     s_listener.name = "ssh";
     s_listener.handler = ssh_conn;
     s_listener.arg = svc;
-    return mp_tcp_listener_start(&s_listener);
+    return mp_xport_listen(&s_listener);
 }
 
 static const mp_service_ops_t s_ops = {

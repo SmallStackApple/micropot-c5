@@ -1,3 +1,10 @@
+/*
+ * lwIP socket backend for mp_xport.
+ *
+ * One accept task per listener, one detached task per connection, bounded
+ * by the global session budget. This is the phase-1 path: vendor brands
+ * (camera/router/printer) keep running on real lwIP sockets unchanged.
+ */
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,78 +17,106 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "mp_tcp_listener.h"
 #include "mp_util.h"
+#include "mp_xport.h"
 
-static const char *TAG = "mp_tcp";
+static const char *TAG = "mp_xport_lwip";
 
 #define MP_LISTEN_BACKLOG  4
 #define MP_CONN_TASK_STACK 4096
 #define MP_CONN_TASK_PRIO  5
 
-/* Global session budget shared by every listener: a flood against one
- * service must not be able to starve the others or exhaust the heap. */
-static portMUX_TYPE s_budget_lock = portMUX_INITIALIZER_UNLOCKED;
-static uint32_t     s_active;
-static mp_overload_hook_t s_overload_hook;
+/* POSIX raises SIGPIPE when writing to a closed peer; lwIP just returns an
+ * error. Ask for the error so the honeypot task survives rude clients. */
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 
-static bool budget_take(void)
+/* ------------------------------------------------------------ conn ops */
+
+static int xc_recv(mp_conn_t *c, void *buf, size_t len, uint32_t timeout_ms)
 {
-    bool ok;
-    portENTER_CRITICAL(&s_budget_lock);
-    ok = s_active < CONFIG_MICROPOT_MAX_SESSIONS;
-    if (ok) {
-        s_active++;
+    int sock = (int)(intptr_t)c->ctx;
+    struct timeval tv = {
+        .tv_sec = (time_t)(timeout_ms / 1000),
+        .tv_usec = (suseconds_t)(timeout_ms % 1000) * 1000,
+    };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    int r = recv(sock, buf, len, 0);
+    if (r > 0) {
+        return r;
     }
-    portEXIT_CRITICAL(&s_budget_lock);
-    return ok;
-}
-
-static void budget_give(void)
-{
-    portENTER_CRITICAL(&s_budget_lock);
-    if (s_active) {
-        s_active--;
+    if (r == 0) {
+        return 0; /* peer closed */
     }
-    portEXIT_CRITICAL(&s_budget_lock);
+    return (errno == EAGAIN || errno == EWOULDBLOCK) ? MP_CONN_TIMEOUT
+                                                     : MP_CONN_ABORTED;
 }
 
-uint32_t mp_tcp_listener_active(void)
+static int xc_send(mp_conn_t *c, const void *buf, size_t len)
 {
-    return s_active;
+    int sock = (int)(intptr_t)c->ctx;
+    const char *p = (const char *)buf;
+    size_t sent = 0;
+    while (sent < len) {
+        int r = send(sock, p + sent, len - sent, MSG_NOSIGNAL);
+        if (r <= 0) {
+            return -1;
+        }
+        sent += (size_t)r;
+    }
+    return 0;
 }
 
-void mp_tcp_listener_set_overload_hook(mp_overload_hook_t hook)
+static void xc_shutdown(mp_conn_t *c)
 {
-    s_overload_hook = hook;
+    int sock = (int)(intptr_t)c->ctx;
+    shutdown(sock, SHUT_WR);
 }
+
+static void xc_release(mp_conn_t *c)
+{
+    int sock = (int)(intptr_t)c->ctx;
+    close(sock);
+    free(c);
+}
+
+static const mp_conn_ops_t s_lwip_conn_ops = {
+    .recv = xc_recv,
+    .send = xc_send,
+    .shutdown = xc_shutdown,
+    .release = xc_release,
+};
+
+/* --------------------------------------------------------- accept loop */
 
 typedef struct {
-    int                        sock;
+    mp_conn_t                 *conn;
     mp_session_t               sess;
-    const mp_tcp_listener_cfg_t *cfg;
+    const mp_listener_cfg_t   *cfg;
 } conn_task_arg_t;
 
 static void conn_task(void *arg)
 {
     conn_task_arg_t *a = (conn_task_arg_t *)arg;
-    a->cfg->handler(a->sock, &a->sess, a->cfg->arg);
-    close(a->sock);
+    a->cfg->handler(a->conn, &a->sess, a->cfg->arg);
+    a->conn->ops->release(a->conn);
     free(a);
-    budget_give();
+    mp_xport_budget_give();
     vTaskDelete(NULL);
 }
 
 typedef struct {
-    int                         sock;
-    const mp_tcp_listener_cfg_t *cfg;
+    int                       sock;
+    const mp_listener_cfg_t  *cfg;
 } accept_ctx_t;
 
 static void accept_loop(void *arg)
 {
     accept_ctx_t *ctx = (accept_ctx_t *)arg;
     int listen_sock = ctx->sock;
-    const mp_tcp_listener_cfg_t *cfg = ctx->cfg;
+    const mp_listener_cfg_t *cfg = ctx->cfg;
 
     for (;;) {
         struct sockaddr_in peer;
@@ -99,27 +134,31 @@ static void accept_loop(void *arg)
 
         /* Over budget: accept then drop at once so the backlog drains and
          * the scanner sees an open-but-helpless port, not a RST storm. */
-        if (!budget_take()) {
-            ESP_LOGW(TAG, "%s: session budget exhausted (%u), dropping %u.%u.%u.%u",
-                     cfg->name, (unsigned)CONFIG_MICROPOT_MAX_SESSIONS,
+        if (!mp_xport_budget_take()) {
+            ESP_LOGW(TAG, "%s: session budget exhausted, dropping %u.%u.%u.%u",
+                     cfg->name,
                      (unsigned)(peer.sin_addr.s_addr & 0xff),
                      (unsigned)((peer.sin_addr.s_addr >> 8) & 0xff),
                      (unsigned)((peer.sin_addr.s_addr >> 16) & 0xff),
                      (unsigned)((peer.sin_addr.s_addr >> 24) & 0xff));
-            if (s_overload_hook) {
-                s_overload_hook(cfg->name, cfg->port);
-            }
+            mp_xport_report_overload(cfg->name, cfg->port);
             close(sock);
             continue;
         }
 
         conn_task_arg_t *a = calloc(1, sizeof(*a));
-        if (!a) {
-            budget_give();
+        mp_conn_t *conn = calloc(1, sizeof(*conn));
+        if (!a || !conn) {
+            free(a);
+            free(conn);
+            mp_xport_budget_give();
             close(sock);
             continue;
         }
-        a->sock = sock;
+        conn->ops = &s_lwip_conn_ops;
+        conn->ctx = (void *)(intptr_t)sock;
+
+        a->conn = conn;
         a->cfg = cfg;
         a->sess.sock = sock;
         a->sess.src_ip = peer.sin_addr.s_addr;
@@ -144,18 +183,15 @@ static void accept_loop(void *arg)
                         MP_CONN_TASK_PRIO, NULL) != pdPASS) {
             ESP_LOGE(TAG, "%s: failed to spawn connection task", cfg->name);
             close(sock);
+            free(conn);
             free(a);
-            budget_give();
+            mp_xport_budget_give();
         }
     }
 }
 
-esp_err_t mp_tcp_listener_start(const mp_tcp_listener_cfg_t *cfg)
+static esp_err_t sock_listen(const mp_listener_cfg_t *cfg)
 {
-    if (!cfg || !cfg->handler) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
     int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock < 0) {
         ESP_LOGE(TAG, "%s: socket() failed", cfg->name);
@@ -199,6 +235,11 @@ esp_err_t mp_tcp_listener_start(const mp_tcp_listener_cfg_t *cfg)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "%s listening on port %u", cfg->name, cfg->port);
+    ESP_LOGI(TAG, "%s listening on port %u (lwip)", cfg->name, cfg->port);
     return ESP_OK;
 }
+
+const mp_xport_backend_t mp_xport_lwip = {
+    .name = "lwip",
+    .listen = sock_listen,
+};

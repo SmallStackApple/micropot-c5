@@ -8,7 +8,6 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "lwip/sockets.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -26,7 +25,7 @@ static const char *TAG = "mp_telnet";
 #define SHELL_TIMEOUT_MS   120000
 #define REBOOT_LINGER_MS   1000
 
-static mp_tcp_listener_cfg_t s_listener;
+static mp_listener_cfg_t s_listener;
 
 /* --------------------------------------------------------- session logic */
 
@@ -58,7 +57,7 @@ static const char *find_response(const mp_telnet_behavior_t *b,
     return c ? c->response : NULL;
 }
 
-static void telnet_conn(int sock, const mp_session_t *sess, void *arg)
+static void telnet_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
 {
     mp_service_t *svc = (mp_service_t *)arg;
     const mp_telnet_behavior_t *b =
@@ -71,11 +70,11 @@ static void telnet_conn(int sock, const mp_session_t *sess, void *arg)
 
     /* IAC WILL ECHO, IAC WILL SUPPRESS-GO-AHEAD */
     const unsigned char init[] = { TELNET_IAC, 251, 1, TELNET_IAC, 251, 3 };
-    mp_send_all(sock, init, sizeof(init));
+    mp_send_all(conn, init, sizeof(init));
 
     if (b->banner) {
-        mp_send_str(sock, b->banner);
-        mp_send_str(sock, "\r\n");
+        mp_send_str(conn, b->banner);
+        mp_send_str(conn, "\r\n");
     }
 
     const char *reason = "auth_failed";
@@ -87,27 +86,27 @@ static void telnet_conn(int sock, const mp_session_t *sess, void *arg)
 
     while (attempt < max_attempts) {
         /* busybox behaviour: username is echoed, the password is not */
-        if (mp_send_str(sock, b->login_prompt) < 0) {
+        if (mp_send_str(conn, b->login_prompt) < 0) {
             reason = "send_error";
             goto done;
         }
-        int n = mp_line_read(sock, user, sizeof(user), LOGIN_TIMEOUT_MS,
+        int n = mp_line_read(conn, user, sizeof(user), LOGIN_TIMEOUT_MS,
                              true, MP_LINE_ECHO_ON);
         if (n < 0) {
             reason = (n == -2) ? "timeout" : "closed";
             goto done;
         }
-        if (mp_send_str(sock, b->password_prompt) < 0) {
+        if (mp_send_str(conn, b->password_prompt) < 0) {
             reason = "send_error";
             goto done;
         }
-        n = mp_line_read(sock, pass, sizeof(pass), LOGIN_TIMEOUT_MS,
+        n = mp_line_read(conn, pass, sizeof(pass), LOGIN_TIMEOUT_MS,
                          true, MP_LINE_ECHO_OFF);
         if (n < 0) {
             reason = (n == -2) ? "timeout" : "closed";
             goto done;
         }
-        mp_send_str(sock, "\r\n");
+        mp_send_str(conn, "\r\n");
 
         attempt++;
         authed = mp_creds_match(b->creds, b->n_creds, user, pass);
@@ -115,8 +114,8 @@ static void telnet_conn(int sock, const mp_session_t *sess, void *arg)
         if (authed) {
             break;
         }
-        mp_send_str(sock, b->login_failed);
-        mp_send_str(sock, "\r\n");
+        mp_send_str(conn, b->login_failed);
+        mp_send_str(conn, "\r\n");
     }
 
     if (!authed) {
@@ -127,11 +126,11 @@ static void telnet_conn(int sock, const mp_session_t *sess, void *arg)
     reason = "closed";
     char cmd[128];
     for (;;) {
-        if (mp_send_str(sock, b->shell_prompt) < 0) {
+        if (mp_send_str(conn, b->shell_prompt) < 0) {
             reason = "send_error";
             break;
         }
-        int n = mp_line_read(sock, cmd, sizeof(cmd), SHELL_TIMEOUT_MS,
+        int n = mp_line_read(conn, cmd, sizeof(cmd), SHELL_TIMEOUT_MS,
                              true, MP_LINE_ECHO_ON);
         if (n < 0) {
             reason = (n == -2) ? "timeout" : "closed";
@@ -152,7 +151,7 @@ static void telnet_conn(int sock, const mp_session_t *sess, void *arg)
             snprintf(out, sizeof(out), "sh: %s: not found", cmd);
             resp = out;
         }
-        if (mp_send_str(sock, resp) < 0 || mp_send_str(sock, "\r\n") < 0) {
+        if (mp_send_str(conn, resp) < 0 || mp_send_str(conn, "\r\n") < 0) {
             reason = "send_error";
             break;
         }
@@ -186,7 +185,7 @@ static esp_err_t telnet_start(mp_service_t *svc)
     s_listener.name = "telnet";
     s_listener.handler = telnet_conn;
     s_listener.arg = svc;
-    return mp_tcp_listener_start(&s_listener);
+    return mp_xport_listen(&s_listener);
 }
 
 static const mp_service_ops_t s_ops = {

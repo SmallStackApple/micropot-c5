@@ -33,12 +33,22 @@ static const mp_persona_t s_personas[] = {
         .n_services = 3,
         .hostname = "HP-LaserJet-M428",
     },
+    {
+        .id = "linux-419",
+        .brand_id = "linux_419",
+        .bind = { .vaddr = 0, .port = 0 },
+        .services = { "telnet", "http", "ssh" },
+        .n_services = 3,
+        .hostname = "linux",
+    },
 };
 
 #if CONFIG_MICROPOT_PERSONA_ROUTER
 #define MP_ACTIVE_PERSONA_INDEX 1
 #elif CONFIG_MICROPOT_PERSONA_PRINTER
 #define MP_ACTIVE_PERSONA_INDEX 2
+#elif CONFIG_MICROPOT_PERSONA_LINUX419
+#define MP_ACTIVE_PERSONA_INDEX 3
 #else
 #define MP_ACTIVE_PERSONA_INDEX 0
 #endif
