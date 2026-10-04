@@ -41,6 +41,8 @@ void mp_net_get_ip_str(char *buf, size_t len);
 /** Human readable gateway IPv4. */
 void mp_net_get_gw_str(char *buf, size_t len);
 
+/** Gateway as a lwIP address word (0 when none), for the liveness probe. */
+uint32_t mp_net_get_gw(void);
 /** Human readable active station MAC, e.g. "00:01:E6:1A:2B:3C". */
 void mp_net_get_mac_str(char *buf, size_t len);
 

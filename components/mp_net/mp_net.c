@@ -224,6 +224,11 @@ void mp_net_get_gw_str(char *buf, size_t len)
     mp_ip4_str(s_gw, buf, len);
 }
 
+uint32_t mp_net_get_gw(void)
+{
+    return s_gw;
+}
+
 void mp_net_get_mac_str(char *buf, size_t len)
 {
     snprintf(buf, len, "%02x:%02x:%02x:%02x:%02x:%02x",
