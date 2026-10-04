@@ -72,7 +72,11 @@ uint16_t s419_icmp_ipid(void)
 
 void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo)
 {
-    struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_RAM);
+    /* PBUF_LINK reserves PBUF_LINK_HLEN (Ethernet header) before the
+     * payload: ethernet_output() prepends it with pbuf_add_header(), which
+     * fails (ERR_BUF) without the headroom. PBUF_RAW_TX only reserves
+     * PBUF_LINK_ENCAPSULATION_HLEN, which is 0 in ESP-IDF. */
+    struct pbuf *p = pbuf_alloc(PBUF_LINK, (u16_t)len, PBUF_RAM);
     if (!p) {
         ESP_LOGD(TAG, "tx: pbuf alloc failed (%u)", (unsigned)len);
         return;
