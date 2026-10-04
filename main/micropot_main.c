@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
 
@@ -67,6 +68,21 @@ static void log_started_services(void)
         if (svc->started) {
             mp_log_service(svc->ops->name, svc->bind.port, true);
         }
+    }
+}
+
+/* Periodic health line: heap (internal min-ever catches slow leaks during
+ * wolfSSH KEX), PSRAM (s419 rings), and the live session count. */
+static void stats_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(30000));
+        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)mp_xport_active());
     }
 }
 
@@ -152,4 +168,5 @@ void app_main(void)
         }
     }
     ESP_LOGI(TAG, "honeypot ready: %s", list);
+    xTaskCreate(stats_task, "stats", 2048, NULL, 3, NULL);
 }

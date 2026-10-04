@@ -83,7 +83,7 @@ void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo)
     ip_addr_set_ip4_u32(dstp, dst_nbo);
     err_t err = raw_sendto(s_pcb_tx, p, dstp); /* HDRINCL: sent verbatim */
     if (err != ERR_OK) {
-        ESP_LOGD(TAG, "tx: raw_sendto -> %d", err);
+        ESP_LOGW(TAG, "tx: raw_sendto -> %d", err);
     }
     pbuf_free(p);
 }
@@ -272,6 +272,12 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
             /* discard */
         } else if (flags & S419_SYN) {
             if (!(flags & S419_FIN)) {
+                ESP_LOGI(TAG, "rx SYN %lu.%lu.%lu.%lu:%u -> :%u (%s)",
+                         (unsigned long)(ip_src >> 24),
+                         (unsigned long)((ip_src >> 16) & 0xff),
+                         (unsigned long)((ip_src >> 8) & 0xff),
+                         (unsigned long)(ip_src & 0xff),
+                         rport, lport, lst->name);
                 s419_tcp_new_syn(lst, ip_dst, ip_src, lport, rport,
                                  th, tcp_len);
             } /* SYN+FIN: discard (T3: R=N) */
@@ -330,6 +336,11 @@ static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (icmp[0] != 8 || icmp[1] != 0) {
         return 0; /* only echo requests are ours (nmap IE test) */
     }
+    ESP_LOGI(TAG, "rx ICMP echo from %lu.%lu.%lu.%lu",
+             (unsigned long)(s419_rd32(ip + 12) >> 24),
+             (unsigned long)((s419_rd32(ip + 12) >> 16) & 0xff),
+             (unsigned long)((s419_rd32(ip + 12) >> 8) & 0xff),
+             (unsigned long)(s419_rd32(ip + 12) & 0xff));
     uint8_t pkt[S419_MAX_PKT];
     size_t n = s419_build_icmp_echo_reply(pkt, ip, p->tot_len,
                                           s419_icmp_ipid(), s419_par);
