@@ -29,6 +29,9 @@ esp_err_t mp_stack419_init(const mp_s419_params_t *params);
  *  (link-liveness diagnostic). -1 when nothing has ever arrived. */
 int64_t mp_s419_rx_age_ms(void);
 
+/** tcpip-thread heartbeat counter (10ms tick); frozen means tcpip wedged. */
+uint32_t mp_s419_tick_count(void);
+
 /** The xport backend that routes listeners/connections through the engine. */
 extern const mp_xport_backend_t mp_xport_s419;
 

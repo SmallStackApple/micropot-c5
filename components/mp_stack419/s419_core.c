@@ -50,10 +50,16 @@ static uint16_t        s_synrecv_count;
 static uint16_t        s_icmp_id;
 static int64_t         s_last_flood_evt_ms;
 static int64_t         s_last_rx_ms = -1; /* any inbound IPv4, diagnostics */
+static volatile uint32_t s_tick_count;    /* tcpip-thread heartbeat */
 
 int64_t mp_s419_rx_age_ms(void)
 {
     return s_last_rx_ms < 0 ? -1 : s419_now_ms() - s_last_rx_ms;
+}
+
+uint32_t mp_s419_tick_count(void)
+{
+    return s_tick_count;
 }
 
 int64_t s419_now_ms(void)
@@ -368,6 +374,7 @@ static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 static void s419_tick(void *arg)
 {
     (void)arg;
+    s_tick_count++; /* tcpip-thread heartbeat, read by the stats task */
     s419_tcp_tick();
     sys_timeout(10, s419_tick, NULL);
 }

@@ -132,12 +132,17 @@ static void stats_task(void *arg)
             rssi = ap.rssi;
         }
         int64_t rx_age = mp_s419_rx_age_ms();
-        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u rssi %d rx_age %llds gwping %dms",
+        static uint32_t s_prev_tick;
+        uint32_t tick = mp_s419_tick_count();
+        uint32_t tick_delta = tick - s_prev_tick; /* ~1650/round when alive */
+        s_prev_tick = tick;
+        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u rssi %d rx_age %llds gwping %dms tick +%lu",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned)mp_xport_active(), rssi,
-                 (long long)(rx_age < 0 ? -1 : rx_age / 1000), s_gw_rtt_ms);
+                 (long long)(rx_age < 0 ? -1 : rx_age / 1000), s_gw_rtt_ms,
+                 (unsigned long)tick_delta);
         struct netif *netif = esp_netif_get_netif_impl(mp_net_netif());
         if (netif) {
             etharp_gratuitous(netif);
