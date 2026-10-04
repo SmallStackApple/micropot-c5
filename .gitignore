@@ -12,3 +12,4 @@ __pycache__/
 test/host/test_evt
 test/host/test_form
 test/host/test_linekit
+asus-numberpad-driver/

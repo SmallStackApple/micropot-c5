@@ -334,17 +334,21 @@ static esp_err_t sshd_start(mp_service_t *svc)
         wolfSSH_SetIOSend(s_ctx, io_send);
         wolfSSH_SetUserAuth(s_ctx, user_auth);
 
-        if (b->key_rsa &&
-            wolfSSH_CTX_UsePrivateKey_buffer(s_ctx, b->key_rsa,
-                                             b->key_rsa_len,
-                                             WOLFSSH_FORMAT_PEM) != WS_SUCCESS) {
-            ESP_LOGE(TAG, "RSA host key rejected");
+        if (b->key_rsa) {
+            int ret = wolfSSH_CTX_UsePrivateKey_buffer(s_ctx, b->key_rsa,
+                                                       b->key_rsa_len,
+                                                       WOLFSSH_FORMAT_ASN1);
+            if (ret != WS_SUCCESS) {
+                ESP_LOGE(TAG, "RSA host key rejected (%d)", ret);
+            }
         }
-        if (b->key_ecdsa &&
-            wolfSSH_CTX_UsePrivateKey_buffer(s_ctx, b->key_ecdsa,
-                                             b->key_ecdsa_len,
-                                             WOLFSSH_FORMAT_PEM) != WS_SUCCESS) {
-            ESP_LOGE(TAG, "ECDSA host key rejected");
+        if (b->key_ecdsa) {
+            int ret = wolfSSH_CTX_UsePrivateKey_buffer(s_ctx, b->key_ecdsa,
+                                                       b->key_ecdsa_len,
+                                                       WOLFSSH_FORMAT_ASN1);
+            if (ret != WS_SUCCESS) {
+                ESP_LOGE(TAG, "ECDSA host key rejected (%d)", ret);
+            }
         }
     }
 

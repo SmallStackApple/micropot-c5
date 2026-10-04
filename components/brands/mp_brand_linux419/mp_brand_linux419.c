@@ -27,12 +27,14 @@ extern const uint8_t linux_login_html_start[] asm("_binary_linux_login_html_star
 extern const uint8_t linux_fail_html_start[]  asm("_binary_linux_fail_html_start");
 extern const uint8_t linux_admin_html_start[] asm("_binary_linux_admin_html_start");
 
-/* Host keys generated once for this honeypot identity (keys/, PEM).
- * A real host keeps stable host keys across boots; so do we. */
-extern const uint8_t ssh_host_rsa_key_start[]   asm("_binary_ssh_host_rsa_key_start");
-extern const uint8_t ssh_host_rsa_key_end[]     asm("_binary_ssh_host_rsa_key_end");
-extern const uint8_t ssh_host_ecdsa_key_start[] asm("_binary_ssh_host_ecdsa_key_start");
-extern const uint8_t ssh_host_ecdsa_key_end[]   asm("_binary_ssh_host_ecdsa_key_end");
+/* Host keys generated once for this honeypot identity (keys/, DER).
+ * A real host keeps stable host keys across boots; so do we.
+ * PEM sources live alongside; wolfSSH here is built without WOLFSSH_CERTS,
+ * so the PEM path is unavailable and the keys are embedded as DER. */
+extern const uint8_t ssh_host_rsa_key_start[]   asm("_binary_ssh_host_rsa_key_der_start");
+extern const uint8_t ssh_host_rsa_key_end[]     asm("_binary_ssh_host_rsa_key_der_end");
+extern const uint8_t ssh_host_ecdsa_key_start[] asm("_binary_ssh_host_ecdsa_key_der_start");
+extern const uint8_t ssh_host_ecdsa_key_end[]   asm("_binary_ssh_host_ecdsa_key_der_end");
 
 /* ------------------------------------------------------- weak credentials */
 

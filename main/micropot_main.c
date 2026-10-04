@@ -142,7 +142,14 @@ void app_main(void)
     }
     log_started_services();
 
-    ESP_LOGI(TAG, "MicroPot-C5 phase-1 ready: telnet :%d, http :%d, ssh :%d",
-             CONFIG_MICROPOT_TELNET_PORT, CONFIG_MICROPOT_HTTP_PORT,
-             CONFIG_MICROPOT_SSH_PORT);
+    char list[96] = "";
+    for (size_t i = 0; i < mp_registry_count(); i++) {
+        mp_service_t *svc = mp_registry_at(i);
+        if (svc->started) {
+            snprintf(list + strlen(list), sizeof(list) - strlen(list),
+                     "%s%s:%d", list[0] ? ", " : "", svc->ops->name,
+                     svc->bind.port);
+        }
+    }
+    ESP_LOGI(TAG, "honeypot ready: %s", list);
 }
