@@ -21,6 +21,7 @@
 #include "mp_http.h"
 #include "mp_log.h"
 #include "mp_net.h"
+#include "mp_s419_params.h"
 #include "mp_ssh.h"
 #include "mp_stack419.h"
 #include "mp_telnet.h"
@@ -92,18 +93,17 @@ void app_main(void)
      * socket, which is why mp_net_init() precedes mp_log_init(). */
     ESP_ERROR_CHECK(mp_net_init(brand->meta->mac_oui, persona->hostname));
 
-    /* Pick the transport: the linux-419 persona carries its own 4.19
-     * TCP/IP engine, every other brand keeps the lwIP socket path. */
+    /* Persona-selected transport. When the brand carries a "stack419"
+     * behaviour, services are carried by the Linux 4.19 TCP/IP engine
+     * instead of lwIP; lwIP keeps handling ARP and the log transport. */
     if (persona->transport && strcmp(persona->transport, "s419") == 0) {
         const mp_s419_params_t *par = mp_brand_behavior(brand, "stack419");
-        if (!par || mp_stack419_init(par) != ESP_OK) {
-            ESP_LOGE(TAG, "persona '%s' wants stack419 but brand '%s' has no "
-                          "usable stack419 behaviour", persona->id,
-                     brand->meta->id);
-            fatal_restart("stack419 unavailable");
+        if (par && mp_stack419_init(par) == ESP_OK) {
+            mp_xport_use(&mp_xport_s419);
+            ESP_LOGI(TAG, "transport: Linux 4.19 engine (mp_stack419)");
+        } else {
+            ESP_LOGE(TAG, "stack419 requested but unavailable, using lwIP");
         }
-        mp_xport_use(&mp_xport_s419);
-        ESP_LOGI(TAG, "transport: %s", mp_xport_backend_name());
     }
 
     ESP_ERROR_CHECK(mp_log_init());

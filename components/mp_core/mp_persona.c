@@ -37,9 +37,10 @@ static const mp_persona_t s_personas[] = {
         .id = "linux-419",
         .brand_id = "linux_419",
         .bind = { .vaddr = 0, .port = 0 },
-        /* http/sshd/ftpd move here as they are ported onto mp_xport; the
-         * services that run today (telnet, banner ssh) already speak
-         * through the 4.19 engine. */
+        /* HTTP currently runs on esp_http_server (lwIP-bound); the Apache-
+         * style mp_httpd replaces it and joins this list in the next step.
+         * Until then port 80 is genuinely closed and answered with a 4.19
+         * RST by the engine. */
         .services = { "telnet", "ssh" },
         .n_services = 2,
         .hostname = "linux",

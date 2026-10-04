@@ -1,21 +1,22 @@
 /*
- * Mini TCP for the 4.19 personality.
+ * Mini TCP session machine, following Linux 4.19 net/ipv4/tcp_input.c and
+ * tcp_output.c where it is observable from the outside:
  *
- * This is not a toy: it carries real honeypot sessions (telnet shells, HTTP
- * responses, SSH handshakes) while behaving like Linux 4.19 where scanners
- * can see it. Behaviours are modelled on the 4.19 tree:
- *   - handshake / SYN-ACK retransmit : tcp_input.c tcp_conn_request(),
- *                                      tcp_output.c tcp_make_synack()
- *   - closed-port / bad-state reset  : tcp_ipv4.c tcp_v4_send_reset()
- *   - list-state flag handling       : tcp_input.c tcp_rcv_state_process()
- *   - delayed ACK, RTO (RFC 6298)    : tcp_input.c tcp_ack()/tcp_timer.c
+ *  - SYN-ACK retransmission and connection request handling
+ *    (tcp_conn_request / tcp_check_req)
+ *  - RST semantics of tcp_v4_send_reset (closed ports and bad segments)
+ *  - delayed ACKs, RFC 6298 RTO with Karn's rule (tcp_timer.c)
+ *  - FIN state machine and TIME_WAIT (tcp_fin_timeout / TCP_TIMEWAIT_LEN)
  *
- * Everything in this file runs in the lwIP tcpip thread (raw callbacks,
- * sys_timeout, tcpip_callback) except the s419_app_* entry points, which
- * are called from the connection task.
+ * Everything here runs in the lwIP tcpip thread except the s419_app_*
+ * entry points, which are called by connection tasks and only touch the
+ * rings under the TCB spinlock.
  */
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "lwip/tcpip.h"
 
 #include "esp_log.h"
@@ -24,706 +25,859 @@
 #include "s419_pkt.h"
 #include "s419_priv.h"
 
-static const char *TAG = "s419_tcp";
+static const char *TAG = "s419tcp";
 
-/* TCP option kinds */
-#define OPT_END   0
-#define OPT_NOP   1
-#define OPT_MSS   2
-#define OPT_WS    3
-#define OPT_SACKP 4
-#define OPT_TS    8
+#define S419_SYN_RECV_TIMEOUT_MS 20000
 
-#define S419_OPT_MSS_DEFAULT 536
+/* --------------------------------------------------------------- output */
 
-/* --------------------------------------------------------------- helpers */
-
-static void wake(s419_tcb *t)
+static void send_synack(s419_tcb *tcb)
 {
-    if (t->rx_sem) {
-        xSemaphoreGive(t->rx_sem);
-    }
-    if (t->tx_sem) {
-        xSemaphoreGive(t->tx_sem);
-    }
+    uint8_t pkt[S419_IP_HLEN + 60];
+    /* The fixed builder emits the 4.19 option layout including a window
+     * scale word, which is what a peer that offered WS expects. */
+    size_t n = s419_build_synack(pkt, s419_par, tcb->lip, tcb->rip,
+                                 tcb->lport, tcb->rport, tcb->iss,
+                                 tcb->rcv_nxt, tcb->ecn);
+    s419_output(pkt, n, tcb->rip);
 }
 
-static void send_plain(s419_tcb *t, uint32_t seq, uint32_t ack, uint8_t flags,
-                       const void *payload, size_t len)
+static void send_ack(s419_tcb *tcb)
 {
-    uint8_t pkt[S419_MAX_PKT];
-    if (S419_IP_HLEN + S419_TCP_HLEN + len > sizeof(pkt)) {
+    uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN];
+    size_t n = s419_build_tcp(pkt, s419_par, tcb->lip, tcb->rip,
+                              tcb->lport, tcb->rport, tcb->snd_nxt,
+                              tcb->rcv_nxt, S419_ACK, s419_par->rcv_wnd,
+                              NULL, 0);
+    s419_output(pkt, n, tcb->rip);
+    tcb->ack_pending = false;
+    tcb->segs_unacked = 0;
+}
+
+/* tcp_send_active_reset(): RST|ACK, seq=snd_nxt, ack=rcv_nxt. */
+static void send_active_reset(s419_tcb *tcb)
+{
+    uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN];
+    size_t n = s419_build_tcp(pkt, s419_par, tcb->lip, tcb->rip,
+                              tcb->lport, tcb->rport, tcb->snd_nxt,
+                              tcb->rcv_nxt, S419_RST | S419_ACK, 0, NULL, 0);
+    s419_output(pkt, n, tcb->rip);
+}
+
+/* tcp_v4_send_reset(): what a closed port (or a LISTEN socket fed an ACK)
+ * answers. With ACK: seq := ack_seq, RST only. Otherwise seq := 0 and
+ * ack := seq + len + syn + fin, RST|ACK. Window is 0, no options.
+ * This produces exactly nmap T4-T7. */
+void s419_tcp_closed_reset(uint32_t lip, uint32_t rip,
+                           uint16_t lport, uint16_t rport,
+                           const uint8_t *th, size_t tcp_len)
+{
+    uint8_t flags = th[13];
+    if (flags & S419_RST) {
         return;
     }
-    size_t n = s419_build_tcp(pkt, s419_par, t->lip, t->rip, t->lport, t->rport,
-                              seq, ack, flags, s419_par->rcv_wnd, payload, len);
-    s419_output(pkt, n, t->rip);
-}
-
-static void send_synack(s419_tcb *t)
-{
-    uint8_t pkt[S419_MAX_PKT];
-    size_t n = s419_build_synack(pkt, s419_par, t->lip, t->rip,
-                                 t->lport, t->rport,
-                                 t->iss, t->rcv_nxt, t->ecn, t->peer_ws_ok);
-    s419_output(pkt, n, t->rip);
-}
-
-static void send_ack(s419_tcb *t)
-{
-    t->ack_pending = false;
-    t->segs_unacked = 0;
-    send_plain(t, t->snd_nxt, t->rcv_nxt, S419_ACK, NULL, 0);
-}
-
-static void ack_now(s419_tcb *t)
-{
-    send_ack(t);
-}
-
-static void ack_schedule(s419_tcb *t)
-{
-    if (!t->ack_pending) {
-        t->ack_pending = true;
-        t->ack_due_ms = s419_now_ms() + (int64_t)s419_par->delack_ms;
+    size_t doff = (size_t)(th[12] >> 4) * 4;
+    if (doff < S419_TCP_HLEN || doff > tcp_len) {
+        return;
     }
-}
+    size_t plen = tcp_len - doff;
 
-/* ------------------------------------------------------- reset semantics */
-
-/* tcp_v4_send_reset(): quit the connection (tcp_ipv4.c). A segment that
- * acknowledges gets RST with seq=ack and no ACK flag; otherwise RST|ACK
- * with seq=0 and ack=seq+len+SYN+FIN. Window 0, no options. */
-static void send_reset(uint32_t lip, uint32_t rip, uint16_t lport,
-                       uint16_t rport, const uint8_t *th, size_t tcp_len)
-{
-    uint32_t seq = s419_rd32(th + 4);
-    uint32_t ack = s419_rd32(th + 8);
-    uint8_t flags = th[13];
-    size_t hdr = (th[12] >> 4) * 4;
-    uint32_t seg_len = 0;
-    if (tcp_len > hdr) {
-        seg_len = (uint32_t)(tcp_len - hdr);
-    }
-
-    uint32_t rseq, rack;
-    uint8_t rflags;
+    uint32_t seq, ack;
+    uint8_t  out_flags;
     if (flags & S419_ACK) {
-        rseq = ack;
-        rack = 0;
-        rflags = S419_RST;
+        seq = s419_rd32(th + 8);
+        ack = 0;
+        out_flags = S419_RST;
     } else {
-        rseq = 0;
-        rack = seq + seg_len + ((flags & S419_SYN) ? 1 : 0) +
-               ((flags & S419_FIN) ? 1 : 0);
-        rflags = S419_RST | S419_ACK;
+        seq = 0;
+        ack = s419_rd32(th + 4) + (uint32_t)plen;
+        if (flags & S419_SYN) {
+            ack++;
+        }
+        if (flags & S419_FIN) {
+            ack++;
+        }
+        out_flags = S419_RST | S419_ACK;
     }
 
-    uint8_t pkt[S419_MAX_PKT];
+    uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN];
     size_t n = s419_build_tcp(pkt, s419_par, lip, rip, lport, rport,
-                              rseq, rack, rflags, 0, NULL, 0);
+                              seq, ack, out_flags, 0, NULL, 0);
     s419_output(pkt, n, rip);
 }
 
-void s419_tcp_closed_reset(uint32_t lip, uint32_t rip, uint16_t lport,
-                           uint16_t rport, const uint8_t *th, size_t tcp_len)
+/* ------------------------------------------------------------- RTO / RTT */
+
+static void rto_rearm(s419_tcb *tcb, int64_t now)
 {
-    send_reset(lip, rip, lport, rport, th, tcp_len);
+    tcb->sent_ms = now;
+    tcb->rto_due_ms = now + (int64_t)tcb->rto_ms;
+    tcb->rto_armed = true;
 }
 
-/* Active reset for an established connection (tcp_send_active_reset). */
-static void reset_conn(s419_tcb *t)
+static void rto_clear(s419_tcb *tcb)
 {
-    send_plain(t, t->snd_nxt, t->rcv_nxt, S419_RST | S419_ACK, NULL, 0);
-    t->dead = true;
-    wake(t);
+    tcb->rto_armed = false;
 }
 
-/* ------------------------------------------------------------- RTT / RTO */
-
-static void rtt_sample(s419_tcb *t, uint32_t m)
+/* RFC 6298 with Linux clamps (tcp_ack_update_rtt / tcp_set_rto). */
+static void rtt_sample(s419_tcb *tcb, uint32_t sample_ms)
 {
-    if (m == 0 || m > 60000) {
-        return;
+    if (sample_ms == 0) {
+        sample_ms = 1;
     }
-    if (!t->rtt_valid) {
-        t->srtt_ms = m;
-        t->rttvar_ms = m / 2;
-        t->rtt_valid = true;
+    if (!tcb->rtt_valid) {
+        tcb->srtt_ms = sample_ms;
+        tcb->rttvar_ms = sample_ms / 2;
+        tcb->rtt_valid = true;
     } else {
-        uint32_t delta = m > t->srtt_ms ? m - t->srtt_ms : t->srtt_ms - m;
-        t->rttvar_ms = (3 * t->rttvar_ms + delta) / 4;
-        t->srtt_ms = (7 * t->srtt_ms + m) / 8;
+        int32_t err = (int32_t)sample_ms - (int32_t)tcb->srtt_ms;
+        if (err < 0) {
+            err = -err;
+        }
+        tcb->rttvar_ms = (tcb->rttvar_ms * 3 + (uint32_t)err) / 4;
+        tcb->srtt_ms = (tcb->srtt_ms * 7 + sample_ms) / 8;
     }
-    uint32_t rto = t->srtt_ms + 4 * t->rttvar_ms;
+    uint32_t rto = tcb->srtt_ms + 4 * tcb->rttvar_ms;
     if (rto < s419_par->rto_min_ms) {
         rto = s419_par->rto_min_ms;
     }
     if (rto > s419_par->rto_max_ms) {
         rto = s419_par->rto_max_ms;
     }
-    t->rto_ms = rto;
+    tcb->rto_ms = rto;
 }
 
-static void rto_arm(s419_tcb *t)
+/* -------------------------------------------------------------- output TX */
+
+static uint32_t tx_in_flight(const s419_tcb *tcb)
 {
-    if (t->rto_armed || (t->snd_nxt == t->snd_una)) {
-        return;
-    }
-    if (t->snd_una == t->snd_nxt) {
-        t->meas_ok = true;
-    }
-    t->rto_due_ms = s419_now_ms() + t->rto_ms;
-    t->rto_armed = true;
+    return tcb->snd_nxt - tcb->snd_una;
 }
 
-/* ---------------------------------------------------------------- output */
-
-/* Send as much buffered application data as the peer window and the fixed
- * congestion window allow, then the FIN if the app asked to close. */
-static void flush(s419_tcb *t)
+static uint32_t tx_pending(const s419_tcb *tcb)
 {
-    if (t->dead || t->state < S419_S_ESTABLISHED) {
+    return (uint32_t)tcb->tx_len - tx_in_flight(tcb);
+}
+
+/* Effective send window: peer's advertised window (scaled) limited by the
+ * fixed congestion window. No slow start: honeypot replies are tiny. */
+static uint32_t tx_usable(const s419_tcb *tcb)
+{
+    uint32_t cwnd = (uint32_t)s419_par->tx_cwnd_segs * tcb->peer_mss;
+    uint32_t wnd = tcb->peer_wnd; /* zero means the peer shut its window */
+    if (wnd > cwnd) {
+        wnd = cwnd;
+    }
+    uint32_t flight = tx_in_flight(tcb);
+    return wnd > flight ? wnd - flight : 0;
+}
+
+/* Send pending data, then the queued FIN, respecting the window. */
+static void flush_tx(s419_tcb *tcb)
+{
+    if (tcb->dead || tcb->state == S419_S_SYN_RECV) {
         return;
     }
+    int64_t now = s419_now_ms();
 
-    uint32_t cwnd = (uint32_t)s419_par->tx_cwnd_segs * t->peer_mss;
-    uint32_t limit = t->peer_wnd < cwnd ? t->peer_wnd : cwnd;
-
-    for (;;) {
-        uint32_t flight = t->snd_nxt - t->snd_una;
-        uint32_t data_flight = flight - (t->fin_sent ? 1 : 0);
-        if (data_flight >= limit || data_flight >= t->tx_len) {
+    while (tx_pending(tcb) > 0) {
+        uint32_t usable = tx_usable(tcb);
+        if (usable == 0) {
             break;
         }
-        uint32_t want = t->peer_mss;
-        if (want > t->tx_len - data_flight) {
-            want = t->tx_len - data_flight;
+        uint32_t off = tx_in_flight(tcb);
+        uint32_t chunk = tx_pending(tcb);
+        if (chunk > tcb->peer_mss) {
+            chunk = tcb->peer_mss;
         }
-        if (want > limit - data_flight) {
-            want = limit - data_flight;
+        if (chunk > usable) {
+            chunk = usable;
         }
-
-        uint8_t seg[S419_MAX_PKT];
-        portENTER_CRITICAL(&t->lock);
-        if (want > S419_TX_CAP) {
-            want = S419_TX_CAP;
+        uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN + 1460];
+        size_t n = s419_build_tcp(pkt, s419_par, tcb->lip, tcb->rip,
+                                  tcb->lport, tcb->rport, tcb->snd_nxt,
+                                  tcb->rcv_nxt, S419_ACK | S419_PSH,
+                                  s419_par->rcv_wnd, tcb->txbuf + off, chunk);
+        s419_output(pkt, n, tcb->rip);
+        tcb->snd_nxt += chunk;
+        if (!tcb->rto_armed) {
+            rto_rearm(tcb, now);
         }
-        memcpy(seg, t->txbuf + data_flight, want);
-        portEXIT_CRITICAL(&t->lock);
-
-        bool fresh = (t->snd_una == t->snd_nxt);
-        send_plain(t, t->snd_una + data_flight, t->rcv_nxt,
-                   S419_ACK | S419_PSH, seg, want);
-        t->snd_nxt += want;
-        t->dupacks = 0;
-        if (fresh) {
-            t->meas_ok = true;
-            t->sent_ms = s419_now_ms();
-        }
-        rto_arm(t);
-    }
-
-    if (t->close_posted && !t->fin_sent &&
-        (t->snd_nxt - t->snd_una) == t->tx_len && t->peer_wnd > 0) {
-        send_plain(t, t->snd_nxt, t->rcv_nxt, S419_ACK | S419_FIN, NULL, 0);
-        t->snd_nxt += 1;
-        t->fin_sent = true;
-        t->meas_ok = false;
-        rto_arm(t);
-        if (t->peer_fin) {
-            t->state = S419_S_LAST_ACK;
-        } else {
-            t->state = S419_S_FIN_WAIT_1;
-        }
-    }
-}
-
-void s419_tcp_flush_msg(void *ctx)
-{
-    s419_tcb *t = (s419_tcb *)ctx;
-    portENTER_CRITICAL(&t->lock);
-    t->flushed_posted = false;
-    portEXIT_CRITICAL(&t->lock);
-    flush(t);
-    /* If the app already detached and everything is closed, reap now. */
-    if (!t->app_attached && t->dead) {
-        s419_tcb_unlink_free(t);
-    }
-}
-
-void s419_tcp_close_msg(void *ctx)
-{
-    s419_tcb *t = (s419_tcb *)ctx;
-
-    portENTER_CRITICAL(&t->lock);
-    t->app_attached = false;
-    if (t->rx_sem) {
-        xSemaphoreGive(t->rx_sem); /* unblock a parked reader */
-    }
-    portEXIT_CRITICAL(&t->lock);
-
-    if (t->state >= S419_S_ESTABLISHED && !t->fin_sent && !t->dead) {
-        t->close_posted = true;
-        flush(t);
-    }
-    if (t->dead) {
-        /* Retransmission gave up or RST: nothing left to keep. */
-        s419_tcb_unlink_free(t);
-    }
-}
-
-/* ------------------------------------------------------- retransmission */
-
-static void retransmit(s419_tcb *t)
-{
-    uint32_t flight = t->snd_nxt - t->snd_una;
-    uint32_t data_flight = flight - (t->fin_sent ? 1 : 0);
-
-    if (t->state == S419_S_SYN_RECV) {
-        send_synack(t);
-    } else if (data_flight > 0) {
-        uint32_t want = t->peer_mss;
-        if (want > data_flight) {
-            want = data_flight;
-        }
-        uint8_t seg[S419_MAX_PKT];
-        portENTER_CRITICAL(&t->lock);
-        memcpy(seg, t->txbuf, want);
-        portEXIT_CRITICAL(&t->lock);
-        send_plain(t, t->snd_una, t->rcv_nxt, S419_ACK | S419_PSH, seg, want);
-    } else if (t->fin_sent) {
-        send_plain(t, t->snd_una, t->rcv_nxt, S419_ACK | S419_FIN, NULL, 0);
-    } else {
-        return;
-    }
-
-    t->meas_ok = false;
-    t->retries++;
-    uint32_t max = (t->state == S419_S_SYN_RECV)
-                       ? s419_par->synack_retries
-                       : s419_par->data_retries;
-    if (t->retries > max) {
-        t->dead = true;
-        wake(t);
-        return;
-    }
-    t->rto_ms = t->rto_ms * 2;
-    if (t->rto_ms > s419_par->rto_max_ms) {
-        t->rto_ms = s419_par->rto_max_ms;
-    }
-    t->rto_due_ms = s419_now_ms() + t->rto_ms;
-}
-
-/* ------------------------------------------------------------ SYN intake */
-
-static void parse_syn_options(s419_tcb *t, const uint8_t *th, size_t tcp_len)
-{
-    size_t hdr = (th[12] >> 4) * 4;
-    if (hdr <= S419_TCP_HLEN || hdr > tcp_len) {
-        return;
-    }
-    const uint8_t *o = th + S419_TCP_HLEN;
-    size_t n = hdr - S419_TCP_HLEN;
-    size_t i = 0;
-    while (i < n) {
-        uint8_t kind = o[i];
-        if (kind == OPT_END) {
+        tcb->meas_ok = true;
+        if (tx_pending(tcb) == 0) {
             break;
         }
-        if (kind == OPT_NOP) {
-            i++;
+    }
+
+    if (tcb->fin_queued && !tcb->fin_sent && tx_pending(tcb) == 0 &&
+        tx_usable(tcb) > 0) {
+        uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN];
+        uint8_t flags = S419_FIN | S419_ACK;
+        if (tx_in_flight(tcb) == 0) {
+            /* no data riding along: FIN is the only thing unacked */
+            tcb->meas_ok = false;
+        }
+        size_t n = s419_build_tcp(pkt, s419_par, tcb->lip, tcb->rip,
+                                  tcb->lport, tcb->rport, tcb->snd_nxt,
+                                  tcb->rcv_nxt, flags, s419_par->rcv_wnd,
+                                  NULL, 0);
+        s419_output(pkt, n, tcb->rip);
+        tcb->snd_nxt++;
+        tcb->fin_sent = true;
+        if (!tcb->rto_armed) {
+            rto_rearm(tcb, now);
+        }
+    }
+}
+
+/* Retransmit the oldest unacked byte (data or FIN), tcp_retransmit_skb(). */
+static void retransmit(s419_tcb *tcb)
+{
+    if (tcb->state == S419_S_SYN_RECV) {
+        send_synack(tcb);
+        return;
+    }
+    if (tcb->dead) {
+        return;
+    }
+    if (tx_in_flight(tcb) == 0) {
+        rto_clear(tcb);
+        return;
+    }
+
+    if (tx_in_flight(tcb) == 1 && tcb->fin_sent &&
+        tcb->snd_nxt - tcb->snd_una == 1) {
+        /* only the FIN is outstanding */
+        uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN];
+        size_t n = s419_build_tcp(pkt, s419_par, tcb->lip, tcb->rip,
+                                  tcb->lport, tcb->rport, tcb->snd_una,
+                                  tcb->rcv_nxt, S419_FIN | S419_ACK,
+                                  s419_par->rcv_wnd, NULL, 0);
+        s419_output(pkt, n, tcb->rip);
+        return;
+    }
+
+    uint32_t len = tx_in_flight(tcb);
+    if (tcb->fin_sent && len > 0) {
+        len--; /* don't retransmit the FIN sequence byte as data */
+    }
+    if (len > tcb->peer_mss) {
+        len = tcb->peer_mss;
+    }
+    uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN + 1460];
+    size_t n = s419_build_tcp(pkt, s419_par, tcb->lip, tcb->rip,
+                              tcb->lport, tcb->rport, tcb->snd_una,
+                              tcb->rcv_nxt, S419_ACK | S419_PSH,
+                              s419_par->rcv_wnd, tcb->txbuf, len);
+    s419_output(pkt, n, tcb->rip);
+    tcb->meas_ok = false; /* Karn: no RTT sample from retransmitted data */
+}
+
+static void rto_backoff(s419_tcb *tcb)
+{
+    uint32_t next = tcb->rto_ms ? tcb->rto_ms * 2 : s419_par->rto_initial_ms;
+    if (next > s419_par->rto_max_ms) {
+        next = s419_par->rto_max_ms;
+    }
+    tcb->rto_ms = next;
+}
+
+static void connection_dead(s419_tcb *tcb)
+{
+    tcb->dead = true;
+    tcb->state = S419_S_CLOSED;
+    rto_clear(tcb);
+    if (tcb->rx_sem) {
+        xSemaphoreGive(tcb->rx_sem);
+    }
+    if (tcb->tx_sem) {
+        xSemaphoreGive(tcb->tx_sem);
+    }
+}
+
+/* Free when both sides are done: app detached and no state to hold. */
+static void try_free(s419_tcb *tcb)
+{
+    if (tcb->app_attached) {
+        return;
+    }
+    if (tcb->state == S419_S_TIME_WAIT && !tcb->dead) {
+        return; /* held until the 2*MSL timer */
+    }
+    if (tcb->state == S419_S_CLOSED || tcb->dead) {
+        if (tcb->budget_held) {
+            tcb->budget_held = false;
+            mp_xport_budget_give();
+        }
+        s419_tcb_unlink_free(tcb);
+    }
+}
+
+/* ------------------------------------------------------------- SYN parse */
+
+typedef struct {
+    uint16_t mss;
+    uint8_t  wscale;
+    bool     ws_ok;
+    bool     sack_ok;
+    bool     ecn;
+} syn_opts_t;
+
+/* tcp_parse_options() subset: MSS, window scale, SACK permitted; ECN from
+ * the ECE/CWR flags (Linux tcp_ecn_accept / TCP_ECN_ok). */
+static void parse_syn_opts(const uint8_t *th, size_t tcp_len, syn_opts_t *o)
+{
+    o->mss = 536; /* RFC 1122 default when the peer sends no MSS */
+    o->wscale = 0;
+    o->ws_ok = false;
+    o->sack_ok = false;
+    o->ecn = false;
+
+    uint8_t flags = th[13];
+    o->ecn = s419_par->ecn_mode != 0 &&
+             ((flags & S419_ECE) && (flags & S419_CWR));
+
+    size_t doff = (size_t)(th[12] >> 4) * 4;
+    if (doff <= S419_TCP_HLEN || doff > tcp_len) {
+        return;
+    }
+    const uint8_t *p = th + S419_TCP_HLEN;
+    const uint8_t *end = th + doff;
+    while (p < end) {
+        uint8_t kind = p[0];
+        if (kind == 0) {
+            break;
+        }
+        if (kind == 1) {
+            p++;
             continue;
         }
-        if (i + 1 >= n) {
+        if (p + 1 >= end) {
             break;
         }
-        uint8_t olen = o[i + 1];
-        if (olen < 2 || i + olen > n) {
+        uint8_t len = p[1];
+        if (len < 2 || p + len > end) {
             break;
         }
-        if (kind == OPT_MSS && olen == 4) {
-            t->peer_mss = s419_rd16(o + i + 2);
-            if (t->peer_mss < 536) {
-                t->peer_mss = 536;
-            }
-            if (t->peer_mss > s419_par->mss) {
-                t->peer_mss = s419_par->mss; /* clamp to local MSS */
-            }
-        } else if (kind == OPT_WS && olen == 3) {
-            uint8_t ws = o[i + 2];
-            if (ws <= 14) {
-                t->peer_wscale = ws;
-                t->peer_ws_ok = true;
-            }
+        if (kind == 2 && len == 4) {
+            o->mss = s419_rd16(p + 2);
+        } else if (kind == 3 && len == 3) {
+            o->ws_ok = true;
+            o->wscale = p[2] > 14 ? 14 : p[2];
+        } else if (kind == 4 && len == 2) {
+            o->sack_ok = true;
         }
-        i += olen;
+        p += len;
     }
 }
+
+/* ------------------------------------------------------------ conn setup */
 
 void s419_tcp_new_syn(const s419_listener_t *lst,
                       uint32_t lip, uint32_t rip,
                       uint16_t lport, uint16_t rport,
                       const uint8_t *th, size_t tcp_len)
 {
-    /* Accept-queue behaviour under load: cap half-open sockets and drop
-     * new SYNs (a loaded Linux drops SYNs unless syncookies are on, which
-     * is exactly the "filtered" look a flood should produce). */
-    unsigned halfopen = 0;
-    for (s419_tcb *it = s419_tcb_first(); it; it = it->next) {
-        if (it->state == S419_S_SYN_RECV) {
-            halfopen++;
-        }
+    if (!s419_core_ready()) {
+        return;
     }
-    if (halfopen >= S419_SYNRECV_CAP) {
+
+    s419_tcb *tcb = s419_tcb_find(lip, rip, lport, rport);
+    if (tcb == NULL && s419_synrecv_count() >= S419_SYNRECV_CAP) {
+        /* backlog pressure: drop new SYNs and report the flood instead of
+         * exhausting the heap with half-open TCBs */
         s419_report_synflood();
         return;
     }
-
-    if (!mp_xport_budget_take()) {
-        s419_report_overload(lst);
-        return;
+    if (tcb == NULL) {
+        tcb = s419_tcb_alloc();
+        if (!tcb) {
+            return;
+        }
+        syn_opts_t o;
+        parse_syn_opts(th, tcp_len, &o);
+        tcb->lip = lip;
+        tcb->rip = rip;
+        tcb->lport = lport;
+        tcb->rport = rport;
+        tcb->state = S419_S_SYN_RECV;
+        tcb->peer_mss = o.mss < 216 ? 536 : o.mss;
+        tcb->peer_ws_ok = o.ws_ok;
+        tcb->peer_wscale = o.wscale;
+        tcb->peer_wnd = (uint32_t)s419_rd16(th + 14) << (o.ws_ok ? o.wscale : 0);
+        tcb->ecn = o.ecn;
+        tcb->iss = s419_isn(rip, lip, rport, lport);
+        tcb->snd_una = tcb->iss;
+        tcb->snd_nxt = tcb->iss;
+        tcb->rcv_nxt = s419_rd32(th + 4) + 1; /* SYN occupies one sequence */
+        tcb->rto_ms = s419_par->rto_initial_ms;
+        tcb->listener = lst;
+        tcb->state_due_ms = s419_now_ms() + S419_SYN_RECV_TIMEOUT_MS;
+        tcb->budget_held = mp_xport_budget_take();
+        tcb->overload = !tcb->budget_held;
+        s419_tcb_link(tcb);
+        s419_synrecv_inc();
+        ESP_LOGD(TAG, "SYN %08lx:%u -> SYN-ACK iss=%08lx", (unsigned long)rip,
+                 rport, (unsigned long)tcb->iss);
     }
-
-    s419_tcb *t = s419_tcb_alloc();
-    if (!t) {
-        mp_xport_budget_give();
-        return;
-    }
-
-    t->lip = lip;
-    t->rip = rip;
-    t->lport = lport;
-    t->rport = rport;
-    t->state = S419_S_SYN_RECV;
-    t->listener = lst;
-    t->peer_mss = S419_OPT_MSS_DEFAULT;
-    t->peer_wnd = 65535;
-    t->rto_ms = s419_par->rto_initial_ms;
-    t->iss = s419_isn(rip, lip, rport, lport);
-    t->snd_una = t->iss;
-    t->snd_nxt = t->iss;
-    t->rcv_nxt = s419_rd32(th + 4) + 1;
-    parse_syn_options(t, th, tcp_len);
-
-    /* Linux answers an ECN-setup SYN (ECE+CWR) with ECE under
-     * tcp_ecn=2, the default. */
-    uint8_t flags = th[13];
-    if (s419_par->ecn_mode == 2 && (flags & S419_ECE) && (flags & S419_CWR)) {
-        t->ecn = true;
-    }
-
-    s419_tcb_link(t);
-    t->budget_taken = true;
-
-    send_synack(t);
-    t->snd_nxt = t->iss + 1;
-    t->meas_ok = false;
-    t->sent_ms = s419_now_ms();
-    rto_arm(t);
+    send_synack(tcb);
+    rto_rearm(tcb, s419_now_ms());
 }
 
-/* -------------------------------------------------------------- input */
+/* ---------------------------------------------------------- state machine */
 
-/* Handle ACK/seq bookkeeping common to established states. */
-static void process_ack(s419_tcb *t, uint32_t ack)
-{
-    if (ack <= t->snd_una || ack > t->snd_nxt) {
-        return;
-    }
-    uint32_t acked = ack - t->snd_una;
-
-    portENTER_CRITICAL(&t->lock);
-    if (acked > t->tx_len) {
-        acked = t->tx_len;
-    }
-    if (acked) {
-        memmove(t->txbuf, t->txbuf + acked, t->tx_len - acked);
-        t->tx_len -= acked;
-    }
-    portEXIT_CRITICAL(&t->lock);
-
-    t->snd_una = ack;
-    t->retries = 0;
-    if (t->meas_ok && t->sent_ms) {
-        rtt_sample(t, (uint32_t)(s419_now_ms() - t->sent_ms));
-    }
-    if (t->snd_una == t->snd_nxt) {
-        t->rto_armed = false;
-        t->meas_ok = false;
-        if (t->fin_sent) {
-            t->fin_acked = true;
-        }
-        /* Close-state machine, tcp_rcv_state_process() */
-        if (t->state == S419_S_LAST_ACK) {
-            t->state = S419_S_CLOSED;
-        } else if (t->state == S419_S_FIN_WAIT_1) {
-            t->state = S419_S_FIN_WAIT_2;
-            t->state_due_ms = s419_now_ms() + s419_par->finwait2_ms;
-        } else if (t->state == S419_S_FIN_WAIT_2 && t->peer_fin) {
-            t->state = S419_S_TIME_WAIT;
-            t->state_due_ms = s419_now_ms() + s419_par->timewait_ms;
-        }
-    } else {
-        t->sent_ms = s419_now_ms();
-        t->rto_due_ms = s419_now_ms() + t->rto_ms;
-        t->rto_armed = true;
-    }
-    if (t->tx_sem) {
-        xSemaphoreGive(t->tx_sem);
-    }
-}
-
-static void handle_fin(s419_tcb *t)
-{
-    t->peer_fin = true;
-    t->rcv_nxt += 1;
-    ack_now(t);
-    wake(t);
-    switch (t->state) {
-    case S419_S_ESTABLISHED:
-        t->state = S419_S_CLOSE_WAIT;
-        break;
-    case S419_S_FIN_WAIT_1:
-        if (t->fin_acked) {
-            t->state = S419_S_TIME_WAIT;
-            t->state_due_ms = s419_now_ms() + s419_par->timewait_ms;
-        } else {
-            t->state = S419_S_FIN_WAIT_2;
-        }
-        break;
-    case S419_S_FIN_WAIT_2:
-        t->state = S419_S_TIME_WAIT;
-        t->state_due_ms = s419_now_ms() + s419_par->timewait_ms;
-        break;
-    default:
-        break;
-    }
-}
-
-void s419_tcp_input(s419_tcb *t, const uint8_t *th, size_t tcp_len,
+void s419_tcp_input(s419_tcb *tcb, const uint8_t *th, size_t tcp_len,
                     uint32_t ip_src, uint32_t ip_dst)
 {
     (void)ip_src; (void)ip_dst;
+    if (tcp_len < S419_TCP_HLEN) {
+        return;
+    }
+    size_t doff = (size_t)(th[12] >> 4) * 4;
+    if (doff < S419_TCP_HLEN || doff > tcp_len) {
+        return;
+    }
+    uint8_t  flags = th[13];
     uint32_t seq = s419_rd32(th + 4);
     uint32_t ack = s419_rd32(th + 8);
     uint16_t wnd = s419_rd16(th + 14);
-    uint8_t flags = th[13];
-    size_t hdr = (th[12] >> 4) * 4;
-    size_t data_len = tcp_len > hdr ? tcp_len - hdr : 0;
-    const uint8_t *data = th + hdr;
+    const uint8_t *payload = th + doff;
+    size_t   plen = tcp_len - doff;
+    int64_t  now = s419_now_ms();
 
-    /* RST: Linux aborts the connection (TIME_WAIT is only assassinated on
-     * a valid RST; we accept it there too). */
+    /* RST is terminal in every state (tcp_reset / tcp_rcv_established). */
     if (flags & S419_RST) {
-        t->dead = true;
-        wake(t);
-        if (!t->app_attached) {
-            s419_tcb_unlink_free(t);
-        }
+        connection_dead(tcb);
+        try_free(tcb);
         return;
     }
 
-    if (t->state == S419_S_SYN_RECV) {
-        if (flags & S419_SYN) {
-            /* retransmitted SYN: resend the same SYN-ACK (tcp_check_req) */
-            send_synack(t);
+    if (flags & S419_SYN) {
+        if (tcb->state == S419_S_SYN_RECV) {
+            send_synack(tcb); /* tcp_check_req retransmits the SYN-ACK */
             return;
         }
-        if ((flags & S419_ACK) && ack == t->snd_nxt) {
-            t->snd_una = ack;
-            t->rcv_nxt = seq;
-            rtt_sample(t, (uint32_t)(s419_now_ms() - t->sent_ms));
-            t->rto_armed = false;
-            t->state = S419_S_ESTABLISHED;
-            t->peer_wnd = (uint32_t)wnd << t->peer_wscale;
-            s419_established(t);
-        } else if (flags & S419_ACK) {
-            send_reset(t->lip, t->rip, t->lport, t->rport, th, tcp_len);
-        }
+        /* SYN inside an established window: tcp_validate_incoming resets */
+        send_active_reset(tcb);
+        connection_dead(tcb);
+        try_free(tcb);
         return;
     }
 
-    if (t->state == S419_S_TIME_WAIT) {
-        if (flags & S419_FIN) {
-            ack_now(t);
+    switch (tcb->state) {
+    case S419_S_SYN_RECV:
+        if (!(flags & S419_ACK)) {
+            return; /* stray segment before the handshake completes */
         }
+        if (ack != tcb->snd_nxt) {
+            /* tcp_check_req: invalid ack -> send RST and drop the request */
+            s419_tcp_closed_reset(tcb->lip, tcb->rip, tcb->lport, tcb->rport,
+                                  th, tcp_len);
+            s419_synrecv_dec();
+            if (tcb->budget_held) {
+                tcb->budget_held = false;
+                mp_xport_budget_give();
+            }
+            s419_tcb_unlink_free(tcb);
+            return;
+        }
+        /* handshake complete */
+        tcb->snd_una = tcb->snd_nxt;
+        tcb->rcv_nxt = seq; /* ACK carries no data */
+        rto_clear(tcb);
+        s419_synrecv_dec();
+        tcb->state = S419_S_ESTABLISHED;
+        if (tcb->overload) {
+            send_active_reset(tcb);
+            connection_dead(tcb);
+            s419_report_overload(tcb->listener);
+            try_free(tcb);
+            return;
+        }
+        s419_established(tcb);
+        /* ACK may carry data (simultaneous open is out of scope) */
+        if (plen == 0) {
+            return;
+        }
+        /* fall through to shared data handling below */
+        [[fallthrough]];
+
+    case S419_S_ESTABLISHED:
+    case S419_S_FIN_WAIT_1:
+    case S419_S_FIN_WAIT_2:
+    case S419_S_CLOSE_WAIT:
+    case S419_S_LAST_ACK:
+        break;
+
+    case S419_S_TIME_WAIT:
+        send_ack(tcb); /* tcp_timewait_state_process answers strays */
+        return;
+
+    default:
         return;
     }
 
-    /* window update */
-    if (!(flags & S419_SYN)) {
-        t->peer_wnd = (uint32_t)wnd << t->peer_wscale;
+    /* peer window (scaled by the scale it announced in its SYN) */
+    tcb->peer_wnd = (uint32_t)wnd << (tcb->peer_ws_ok ? tcb->peer_wscale : 0);
+    if (tcb->peer_wnd == 0 && tx_pending(tcb) > 0) {
+        /* zero window: nothing to send until a window update arrives */
     }
 
+    /* ---- ACK processing (tcp_ack) ---- */
     if (flags & S419_ACK) {
-        process_ack(t, ack);
+        if (ack > tcb->snd_nxt) {
+            send_ack(tcb); /* challenge ACK, tcp_send_challenge_ack */
+            return;
+        }
+        if (ack > tcb->snd_una) {
+            uint32_t acked = ack - tcb->snd_una;
+            if (tcb->rto_armed && tcb->meas_ok && tcb->sent_ms) {
+                rtt_sample(tcb, (uint32_t)(now - tcb->sent_ms));
+            }
+            if (acked > tcb->tx_len) {
+                acked = tcb->tx_len;
+            }
+            tcb->tx_len -= (uint16_t)acked;
+            if (tcb->tx_len) {
+                memmove(tcb->txbuf, tcb->txbuf + acked, tcb->tx_len);
+            }
+            tcb->snd_una = ack;
+            tcb->retries = 0;
+            tcb->dupacks = 0;
+            if (tx_in_flight(tcb) == 0) {
+                tcb->meas_ok = false;
+                rto_clear(tcb);
+            } else {
+                rto_rearm(tcb, now);
+            }
+            if (tcb->fin_sent && tcb->snd_una == tcb->snd_nxt) {
+                tcb->fin_acked = true;
+            }
+            if (tcb->tx_sem) {
+                xSemaphoreGive(tcb->tx_sem);
+            }
+
+            if (tcb->state == S419_S_FIN_WAIT_1 && tcb->fin_acked) {
+                tcb->state = S419_S_FIN_WAIT_2;
+                tcb->state_due_ms = now + (int64_t)s419_par->finwait2_ms;
+            } else if (tcb->state == S419_S_LAST_ACK && tcb->fin_acked) {
+                tcb->state = S419_S_CLOSED;
+                try_free(tcb);
+                return;
+            } else if (tcb->state == S419_S_TIME_WAIT && tcb->fin_acked) {
+                /* refresh the 2*MSL timer on retransmitted FIN */
+                tcb->state_due_ms = now + (int64_t)s419_par->timewait_ms;
+            }
+        } else if (plen == 0 && !(flags & S419_FIN) && tx_in_flight(tcb) > 0) {
+            /* duplicate ACK: tcp_fastretransmit needs 3 (dupacks) */
+            if (++tcb->dupacks == 3) {
+                retransmit(tcb);
+                rto_rearm(tcb, now);
+            }
+        }
     }
 
-    if (data_len > 0) {
-        if (seq == t->rcv_nxt) {
-            if (!t->app_attached) {
-                t->rcv_nxt += data_len;
-                ack_now(t);
+    /* ---- in-order data ---- */
+    if (plen > 0) {
+        if (seq == tcb->rcv_nxt) {
+            if (tcb->app_attached && (uint32_t)tcb->rx_len + plen <= S419_RX_CAP) {
+                memcpy(tcb->rxbuf + tcb->rx_len, payload, plen);
+                tcb->rx_len = (uint16_t)(tcb->rx_len + plen);
+                tcb->rcv_nxt += plen;
+                if (tcb->rx_sem) {
+                    xSemaphoreGive(tcb->rx_sem);
+                }
+                /* delayed ACK: ack at once on the 2nd segment or a full one */
+                tcb->segs_unacked++;
+                if (tcb->segs_unacked >= 2 || plen >= tcb->peer_mss) {
+                    send_ack(tcb);
+                } else if (!tcb->ack_pending) {
+                    tcb->ack_pending = true;
+                    tcb->ack_due_ms = now + (int64_t)s419_par->delack_ms;
+                }
             } else {
-                portENTER_CRITICAL(&t->lock);
-                bool fits = (t->rx_len + data_len <= S419_RX_CAP);
-                if (fits) {
-                    memcpy(t->rxbuf + t->rx_len, data, data_len);
-                    t->rx_len += (uint16_t)data_len;
-                } else {
-                    t->rcv_nxt -= 0; /* keep window honest: drop + dup */
-                }
-                portEXIT_CRITICAL(&t->lock);
-
-                if (fits) {
-                    t->rcv_nxt += data_len;
-                    t->segs_unacked++;
-                    if (t->segs_unacked >= 2 || data_len < t->peer_mss) {
-                        ack_now(t);
-                    } else {
-                        ack_schedule(t);
-                    }
-                    wake(t);
-                } else {
-                    /* no room: force peer retransmit with an immediate ACK */
-                    ack_now(t);
-                }
+                send_ack(tcb); /* no room: let the peer retransmit later */
             }
         } else {
-            /* out of order: duplicate ACK (we do not keep an ofo queue;
-             * the sender retransmits, which is what a lossy path looks
-             * like and keeps seq bookkeeping exact) */
-            ack_now(t);
+            send_ack(tcb); /* out of order: duplicate ACK, tcp_send_dupack */
         }
     }
 
+    /* ---- FIN ---- */
     if (flags & S419_FIN) {
-        uint32_t fin_seq = seq + (uint32_t)data_len;
-        if (fin_seq == t->rcv_nxt) {
-            handle_fin(t);
+        if (seq + (uint32_t)plen == tcb->rcv_nxt) {
+            tcb->rcv_nxt++;
+            tcb->peer_fin = true;
+            send_ack(tcb);
+            if (tcb->rx_sem) {
+                xSemaphoreGive(tcb->rx_sem);
+            }
+            switch (tcb->state) {
+            case S419_S_ESTABLISHED:
+            case S419_S_SYN_RECV:
+                tcb->state = S419_S_CLOSE_WAIT;
+                break;
+            case S419_S_FIN_WAIT_1:
+                if (tcb->fin_acked) {
+                    tcb->state = S419_S_TIME_WAIT;
+                    tcb->state_due_ms = now + (int64_t)s419_par->timewait_ms;
+                } else {
+                    tcb->state = S419_S_LAST_ACK;
+                }
+                break;
+            case S419_S_FIN_WAIT_2:
+                tcb->state = S419_S_TIME_WAIT;
+                tcb->state_due_ms = now + (int64_t)s419_par->timewait_ms;
+                break;
+            default:
+                break;
+            }
         } else {
-            ack_now(t);
+            send_ack(tcb);
         }
     }
 
-    flush(t);
-    if (t->dead && !t->app_attached) {
-        s419_tcb_unlink_free(t);
+    flush_tx(tcb);
+}
+
+/* ------------------------------------------------------------- app close */
+
+void s419_tcp_abort(s419_tcb *tcb)
+{
+    if (!tcb->dead) {
+        send_active_reset(tcb);
+        connection_dead(tcb);
+    }
+    if (tcb->budget_held) {
+        tcb->budget_held = false;
+        mp_xport_budget_give();
+    }
+    if (tcb->state == S419_S_SYN_RECV) {
+        s419_synrecv_dec();
+    }
+    tcb->app_attached = false;
+    s419_tcb_unlink_free(tcb);
+}
+
+void s419_tcp_close_msg(void *ctx)
+{
+    s419_tcb *tcb = (s419_tcb *)ctx;
+    tcb->close_posted = true;
+    if (tcb->dead) {
+        return;
+    }
+    if (tcb->state == S419_S_TIME_WAIT) {
+        return;
+    }
+    /* orderLY release: all data first, then FIN (tcp_close) */
+    tcb->fin_queued = true;
+    if (tcb->state == S419_S_CLOSE_WAIT) {
+        /* peer already sent FIN: our FIN moves us to LAST_ACK */
+    } else if (tcb->state == S419_S_ESTABLISHED) {
+        tcb->state = S419_S_FIN_WAIT_1;
+    }
+    flush_tx(tcb);
+    if (!tcb->fin_sent && tx_pending(tcb) == 0) {
+        /* flush_tx emits the FIN when the window allows */
     }
 }
 
-/* --------------------------------------------------------------- timers */
+void s419_tcp_flush_msg(void *ctx)
+{
+    s419_tcb *tcb = (s419_tcb *)ctx;
+    tcb->flushed_posted = false;
+    flush_tx(tcb);
+}
+
+void s419_tcp_detach_msg(void *ctx)
+{
+    s419_tcb *tcb = (s419_tcb *)ctx;
+    tcb->app_attached = false;
+    if (tcb->budget_held) {
+        /* the budget counts live application sessions, exactly like the
+         * lwIP backend (the TCB may linger in TIME_WAIT without one) */
+        tcb->budget_held = false;
+        mp_xport_budget_give();
+    }
+    if (!tcb->close_posted && !tcb->dead && tcb->state != S419_S_TIME_WAIT) {
+        tcb->close_posted = true;
+        tcb->fin_queued = true;
+        if (tcb->state == S419_S_ESTABLISHED) {
+            tcb->state = S419_S_FIN_WAIT_1;
+        }
+    }
+    flush_tx(tcb);
+    try_free(tcb);
+}
+
+/* ------------------------------------------------------------------ tick */
 
 void s419_tcp_tick(void)
 {
     int64_t now = s419_now_ms();
-    for (s419_tcb *t = s419_tcb_first(); t; ) {
-        s419_tcb *next = t->next;
-        if (!t->dead) {
-            if (t->ack_pending && now >= t->ack_due_ms) {
-                send_ack(t);
+
+    s419_tcb *tcb = s419_tcb_head;
+    while (tcb) {
+        s419_tcb *next = tcb->next;
+
+        if (tcb->dead) {
+            tcb = next;
+            continue;
+        }
+
+        /* retransmission timeout */
+        if (tcb->rto_armed && now >= tcb->rto_due_ms) {
+            uint8_t max_retries = (tcb->state == S419_S_SYN_RECV)
+                                      ? s419_par->synack_retries
+                                      : s419_par->data_retries;
+            if (tcb->retries >= max_retries) {
+                /* give up: Linux drops silently (ETIMEDOUT) */
+                if (tcb->state == S419_S_SYN_RECV) {
+                    s419_synrecv_dec();
+                }
+                connection_dead(tcb);
+                tcb->state = S419_S_CLOSED;
+                try_free(tcb);
+                tcb = next;
+                continue;
             }
-            if (t->rto_armed && now >= t->rto_due_ms) {
-                retransmit(t);
+            tcb->retries++;
+            rto_backoff(tcb);
+            retransmit(tcb);
+            rto_rearm(tcb, now);
+        }
+
+        /* delayed ACK */
+        if (tcb->ack_pending && now >= tcb->ack_due_ms) {
+            send_ack(tcb);
+        }
+
+        /* state deadlines: SYN_RECV gives up, FIN_WAIT_2 lingers,
+         * TIME_WAIT is the 2*MSL hold */
+        if (tcb->state_due_ms && now >= tcb->state_due_ms) {
+            if (tcb->state == S419_S_SYN_RECV) {
+                s419_synrecv_dec();
+                if (tcb->budget_held) {
+                    tcb->budget_held = false;
+                    mp_xport_budget_give();
+                }
+                connection_dead(tcb);
+                try_free(tcb);
+                tcb = next;
+                continue;
             }
-            if ((t->state == S419_S_TIME_WAIT ||
-                 t->state == S419_S_FIN_WAIT_2) &&
-                t->state_due_ms && now >= t->state_due_ms) {
-                s419_tcb_unlink_free(t);
+            if (tcb->state == S419_S_FIN_WAIT_2) {
+                tcb->state = S419_S_CLOSED;
+                try_free(tcb);
+                tcb = next;
+                continue;
+            }
+            if (tcb->state == S419_S_TIME_WAIT) {
+                tcb->state = S419_S_CLOSED;
+                try_free(tcb);
+                tcb = next;
                 continue;
             }
         }
-        if (t->dead && !t->app_attached) {
-            s419_tcb_unlink_free(t);
-            continue;
-        }
-        t = next;
+
+        tcb = next;
     }
 }
 
-/* ------------------------------------------------------------ app side */
+/* --------------------------------------------------- application interface */
 
-static bool is_writable(const s419_tcb *t)
-{
-    if (t->dead || t->fin_sent) {
-        return false;
-    }
-    return t->state == S419_S_ESTABLISHED || t->state == S419_S_CLOSE_WAIT;
-}
-
-int s419_app_recv(s419_tcb *t, void *buf, size_t len, uint32_t timeout_ms)
+int s419_app_recv(s419_tcb *tcb, void *buf, size_t len, uint32_t timeout_ms)
 {
     for (;;) {
-        portENTER_CRITICAL(&t->lock);
-        if (t->rx_len) {
-            uint16_t n = t->rx_len < len ? t->rx_len : (uint16_t)len;
-            memcpy(buf, t->rxbuf, n);
-            memmove(t->rxbuf, t->rxbuf + n, t->rx_len - n);
-            t->rx_len -= n;
-            portEXIT_CRITICAL(&t->lock);
+        portENTER_CRITICAL(&tcb->lock);
+        if (tcb->rx_len > 0) {
+            size_t n = tcb->rx_len < len ? tcb->rx_len : len;
+            memcpy(buf, tcb->rxbuf, n);
+            tcb->rx_len -= (uint16_t)n;
+            if (tcb->rx_len) {
+                memmove(tcb->rxbuf, tcb->rxbuf + n, tcb->rx_len);
+            }
+            portEXIT_CRITICAL(&tcb->lock);
             return (int)n;
         }
-        bool fin = t->peer_fin;
-        bool dead = t->dead;
-        portEXIT_CRITICAL(&t->lock);
-
-        if (fin) {
-            return 0;
-        }
+        bool dead = tcb->dead;
+        bool fin = tcb->peer_fin;
+        portEXIT_CRITICAL(&tcb->lock);
         if (dead) {
             return MP_CONN_ABORTED;
         }
-        if (xSemaphoreTake(t->rx_sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
-            return MP_CONN_TIMEOUT;
+        if (fin) {
+            return 0; /* clean close */
         }
-    }
-}
-
-int s419_app_send(s419_tcb *t, const void *buf, size_t len)
-{
-    const uint8_t *p = (const uint8_t *)buf;
-    size_t left = len;
-
-    while (left) {
-        portENTER_CRITICAL(&t->lock);
-        bool ok = is_writable(t);
-        uint16_t space = ok ? (uint16_t)(S419_TX_CAP - t->tx_len) : 0;
-        if (space) {
-            size_t n = left < space ? left : space;
-            memcpy(t->txbuf + t->tx_len, p, n);
-            t->tx_len += (uint16_t)n;
-            left -= n;
-            p += n;
+        if (tcb->rx_sem == NULL) {
+            return MP_CONN_ABORTED;
         }
-        bool post = space && !t->flushed_posted;
-        if (post) {
-            t->flushed_posted = true;
-        }
-        portEXIT_CRITICAL(&t->lock);
-
-        if (!ok) {
-            return -1;
-        }
-        if (post) {
-            tcpip_callback(s419_tcp_flush_msg, t);
-        }
-        if (left) {
-            if (xSemaphoreTake(t->tx_sem, pdMS_TO_TICKS(30000)) != pdTRUE) {
-                return -1;
+        if (xSemaphoreTake(tcb->rx_sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+            /* re-check before reporting the timeout */
+            portENTER_CRITICAL(&tcb->lock);
+            bool have = tcb->rx_len > 0 || tcb->dead || tcb->peer_fin;
+            portEXIT_CRITICAL(&tcb->lock);
+            if (!have) {
+                return MP_CONN_TIMEOUT;
             }
         }
     }
+}
+
+int s419_app_send(s419_tcb *tcb, const void *buf, size_t len)
+{
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t off = 0;
+    bool notified = false;
+
+    while (off < len) {
+        if (tcb->dead) {
+            return -1;
+        }
+        portENTER_CRITICAL(&tcb->lock);
+        if (tcb->dead) {
+            portEXIT_CRITICAL(&tcb->lock);
+            return -1;
+        }
+        uint32_t space = tcb->tx_len < S419_TX_CAP ? S419_TX_CAP - tcb->tx_len : 0;
+        size_t n = len - off < space ? len - off : space;
+        if (n) {
+            memcpy(tcb->txbuf + tcb->tx_len, p + off, n);
+            tcb->tx_len = (uint16_t)(tcb->tx_len + n);
+            off += n;
+            notified = false;
+        }
+        portEXIT_CRITICAL(&tcb->lock);
+
+        if (off < len) {
+            if (tcb->tx_sem) {
+                xSemaphoreTake(tcb->tx_sem, pdMS_TO_TICKS(30000));
+            } else {
+                return -1;
+            }
+        }
+        if (!notified) {
+            tcpip_callback_with_block(s419_tcp_flush_msg, tcb, 0);
+            notified = true;
+        }
+    }
+    tcpip_callback_with_block(s419_tcp_flush_msg, tcb, 0);
     return 0;
 }
 
-void s419_app_shutdown(s419_tcb *t)
+void s419_app_shutdown(s419_tcb *tcb)
 {
-    t->close_posted = true;
-    tcpip_callback(s419_tcp_flush_msg, t);
+    if (tcb->dead || tcb->close_posted) {
+        return;
+    }
+    tcpip_callback_with_block(s419_tcp_close_msg, tcb, 0);
 }
 
-void s419_app_release(s419_tcb *t)
+void s419_app_release(s419_tcb *tcb)
 {
-    tcpip_callback(s419_tcp_close_msg, t);
+    /* Hand the TCB back to the tcpip thread: it orders the close and frees
+     * the TCB (and its rings) once the connection is fully closed. The app
+     * must not touch the TCB after this point. */
+    tcpip_callback_with_block(s419_tcp_detach_msg, tcb, 0);
 }

@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "lwip/def.h"
 #include "lwip/ip_addr.h"
 #include "lwip/pbuf.h"
 #include "lwip/raw.h"
@@ -44,9 +45,8 @@ static struct raw_pcb *s_pcb_tx;   /* IP_HDRINCL sender */
 
 static s419_listener_t s_listeners[S419_MAX_LISTENERS];
 static size_t          s_n_listeners;
-static portMUX_TYPE    s_listen_lock = portMUX_INITIALIZER_UNLOCKED;
 
-static s419_tcb       *s_tcbs;
+s419_tcb              *s419_tcb_head;
 static uint16_t        s_synrecv_count;
 static uint16_t        s_icmp_id;
 static int64_t         s_last_flood_evt_ms;
@@ -59,7 +59,8 @@ int64_t s419_now_ms(void)
 
 uint32_t s419_our_ip(void)
 {
-    return mp_net_get_ip(); /* network byte order, 0 before DHCP */
+    /* host-order numeric (mp_net hands out the raw network-order word) */
+    return lwip_ntohl(mp_net_get_ip());
 }
 
 uint16_t s419_icmp_ipid(void)
@@ -69,7 +70,7 @@ uint16_t s419_icmp_ipid(void)
 
 /* ---------------------------------------------------------------- output */
 
-void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo)
+void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_host)
 {
     struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_RAM);
     if (!p) {
@@ -78,8 +79,8 @@ void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo)
     }
     pbuf_take(p, pkt, (u16_t)len);
     ip_addr_t dst;
-    IP_ADDR4(&dst, (uint8_t)(dst_nbo >> 24), (uint8_t)(dst_nbo >> 16),
-             (uint8_t)(dst_nbo >> 8), (uint8_t)dst_nbo);
+    IP_ADDR4(&dst, (dst_host >> 24) & 0xff, (dst_host >> 16) & 0xff,
+             (dst_host >> 8) & 0xff, dst_host & 0xff);
     err_t err = raw_sendto(s_pcb_tx, p, &dst); /* HDRINCL: sent verbatim */
     if (err != ERR_OK) {
         ESP_LOGD(TAG, "tx: raw_sendto -> %d", err);
@@ -92,6 +93,25 @@ void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo)
 void s419_report_overload(const s419_listener_t *lst)
 {
     mp_xport_report_overload(lst->name, lst->port);
+}
+
+uint16_t s419_synrecv_count(void)
+{
+    return s_synrecv_count;
+}
+
+void s419_synrecv_inc(void)
+{
+    if (s_synrecv_count < 0xffff) {
+        s_synrecv_count++;
+    }
+}
+
+void s419_synrecv_dec(void)
+{
+    if (s_synrecv_count) {
+        s_synrecv_count--;
+    }
 }
 
 void s419_report_synflood(void)
@@ -140,22 +160,19 @@ s419_tcb *s419_tcb_alloc(void)
 
 void s419_tcb_link(s419_tcb *tcb)
 {
-    tcb->next = s_tcbs;
-    s_tcbs = tcb;
+    tcb->next = s419_tcb_head;
+    s419_tcb_head = tcb;
 }
 
 void s419_tcb_unlink_free(s419_tcb *tcb)
 {
-    s419_tcb **pp = &s_tcbs;
+    s419_tcb **pp = &s419_tcb_head;
     while (*pp) {
         if (*pp == tcb) {
             *pp = tcb->next;
             break;
         }
         pp = &(*pp)->next;
-    }
-    if (tcb->budget_taken) {
-        mp_xport_budget_give();
     }
     if (tcb->rx_sem) {
         vSemaphoreDelete(tcb->rx_sem);
@@ -168,15 +185,10 @@ void s419_tcb_unlink_free(s419_tcb *tcb)
     free(tcb);
 }
 
-s419_tcb *s419_tcb_first(void)
-{
-    return s_tcbs;
-}
-
 s419_tcb *s419_tcb_find(uint32_t lip, uint32_t rip,
                         uint16_t lport, uint16_t rport)
 {
-    for (s419_tcb *t = s_tcbs; t; t = t->next) {
+    for (s419_tcb *t = s419_tcb_head; t; t = t->next) {
         if (t->lip == lip && t->rip == rip &&
             t->lport == lport && t->rport == rport) {
             return t;
@@ -189,45 +201,30 @@ s419_tcb *s419_tcb_find(uint32_t lip, uint32_t rip,
 
 const s419_listener_t *s419_listener_find(uint16_t port)
 {
-    const s419_listener_t *found = NULL;
-    portENTER_CRITICAL(&s_listen_lock);
     for (size_t i = 0; i < s_n_listeners; i++) {
         if (s_listeners[i].port == port) {
-            found = &s_listeners[i];
-            break;
+            return &s_listeners[i];
         }
     }
-    portEXIT_CRITICAL(&s_listen_lock);
-    return found;
+    return NULL;
 }
 
 esp_err_t s419_listener_add(uint16_t port, const char *name,
                             mp_conn_handler_t handler, void *arg)
 {
-    esp_err_t err = ESP_OK;
-    portENTER_CRITICAL(&s_listen_lock);
     if (s_n_listeners >= S419_MAX_LISTENERS) {
-        err = ESP_ERR_NO_MEM;
-    } else {
-        for (size_t i = 0; i < s_n_listeners; i++) {
-            if (s_listeners[i].port == port) {
-                err = ESP_ERR_INVALID_STATE;
-                break;
-            }
-        }
-        if (err == ESP_OK) {
-            s419_listener_t *l = &s_listeners[s_n_listeners++];
-            l->port = port;
-            l->name = name;
-            l->handler = handler;
-            l->arg = arg;
-        }
+        return ESP_ERR_NO_MEM;
     }
-    portEXIT_CRITICAL(&s_listen_lock);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "%s listening on port %u (stack419)", name, port);
+    if (s419_listener_find(port)) {
+        return ESP_ERR_INVALID_STATE;
     }
-    return err;
+    s419_listener_t *l = &s_listeners[s_n_listeners++];
+    l->port = port;
+    l->name = name;
+    l->handler = handler;
+    l->arg = arg;
+    ESP_LOGI(TAG, "%s listening on port %u (stack419)", name, port);
+    return ESP_OK;
 }
 
 /* --------------------------------------------------------------- receive */

@@ -102,8 +102,8 @@ static size_t put_tcp(uint8_t *out, uint32_t src_nbo, uint32_t dst_nbo,
     uint8_t *tcp = out + S419_IP_HLEN;
     size_t hdr_len = S419_TCP_HLEN + opts_len;
 
-    memcpy(tcp + 0, &sport_nbo, 2); /* keep network byte order */
-    memcpy(tcp + 2, &dport_nbo, 2);
+    put16(tcp + 0, sport_nbo); /* ports are host order like the addresses */
+    put16(tcp + 2, dport_nbo);
     put32(tcp + 4, seq);
     put32(tcp + 8, ack);
     tcp[12] = (uint8_t)((hdr_len / 4) << 4);
@@ -126,7 +126,7 @@ static size_t put_tcp(uint8_t *out, uint32_t src_nbo, uint32_t dst_nbo,
 size_t s419_build_synack(uint8_t *out, const mp_s419_params_t *par,
                          uint32_t src_nbo, uint32_t dst_nbo,
                          uint16_t sport_nbo, uint16_t dport_nbo,
-                         uint32_t seq, uint32_t ack, bool ece, bool offer_ws)
+                         uint32_t seq, uint32_t ack, bool ece)
 {
     /* tcp_options_write(), timestamps disabled, SACK + WSCALE on:
      *   word1: 02 04 mss          (MSS)
@@ -141,11 +141,12 @@ size_t s419_build_synack(uint8_t *out, const mp_s419_params_t *par,
     if (par->sack_perm) {
         opts[n++] = 0x01; opts[n++] = 0x01;
         opts[n++] = 0x04; opts[n++] = 0x02;
+    } else {
+        opts[n++] = 0x01; opts[n++] = 0x01;
+        opts[n++] = 0x01; opts[n++] = 0x01;
     }
-    if (offer_ws) {
-        opts[n++] = 0x01; opts[n++] = 0x03; opts[n++] = 0x03;
-        opts[n++] = par->wscale;
-    }
+    opts[n++] = 0x01; opts[n++] = 0x03; opts[n++] = 0x03;
+    opts[n++] = par->wscale;
 
     uint8_t flags = S419_SYN | S419_ACK | (ece ? S419_ECE : 0);
     size_t tcp_len = put_tcp(out, src_nbo, dst_nbo, sport_nbo, dport_nbo,
@@ -187,11 +188,13 @@ size_t s419_build_icmp_echo_reply(uint8_t *out, const uint8_t *req,
     put16(icmp + 2, 0);
     put16(icmp + 2, s419_cksum(icmp, icmp_len));
 
-    uint32_t src_nbo, dst_nbo;
-    memcpy(&src_nbo, req + 16, 4); /* reply src = original dst (us) */
-    memcpy(&dst_nbo, req + 12, 4);
+    uint32_t src, dst;
+    src = ((uint32_t)req[16] << 24) | ((uint32_t)req[17] << 16) |
+          ((uint32_t)req[18] << 8) | req[19]; /* reply src = original dst */
+    dst = ((uint32_t)req[12] << 24) | ((uint32_t)req[13] << 16) |
+          ((uint32_t)req[14] << 8) | req[15];
     s419_put_ip(out, (uint16_t)(S419_IP_HLEN + icmp_len), ipid, par->icmp_df,
-                par->ttl, IP_PROTO_ICMP, src_nbo, dst_nbo);
+                par->ttl, IP_PROTO_ICMP, src, dst);
     return S419_IP_HLEN + icmp_len;
 }
 

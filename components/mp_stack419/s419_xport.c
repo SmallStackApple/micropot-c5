@@ -1,36 +1,29 @@
 /*
- * mp_xport backend on top of the 4.19 engine.
- *
- * A listener is registered with the engine; the engine completes the
- * three-way handshake itself (that is the point), then calls
- * s419_established() in tcpip context, where a connection task is spawned
- * with an mp_conn_t whose ctx is the TCB. The task reads/writes through
- * the TCB rings; TCP state stays owned by the tcpip thread.
+ * mp_xport backend: services attach to the 4.19 engine through the same
+ * listen/accept contract they use on lwIP. The handshake is already done
+ * when a connection task is spawned, so the task only sees application
+ * data — exactly like accept() on a socket.
  */
 #include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "lwip/ip4_addr.h"
 
 #include "mp_util.h"
+#include "mp_xport.h"
 
 #include "s419_priv.h"
 
-static const char *TAG = "s419_xport";
+static const char *TAG = "s419x";
 
 #define S419_CONN_TASK_STACK 4096
 #define S419_CONN_TASK_PRIO  5
-
-typedef struct {
-    mp_conn_t            *conn;
-    s419_tcb             *tcb;
-    const s419_listener_t *lst;
-    mp_session_t          sess;
-} conn_task_arg_t;
 
 /* ------------------------------------------------------------- conn ops */
 
@@ -62,74 +55,76 @@ static const mp_conn_ops_t s_conn_ops = {
     .release = conn_release,
 };
 
-/* ----------------------------------------------------------- task spawn */
+/* ------------------------------------------------------ connection tasks */
+
+typedef struct {
+    mp_conn_t               *conn;
+    mp_session_t             sess;
+    const s419_listener_t   *listener;
+} conn_task_arg_t;
 
 static void conn_task(void *arg)
 {
     conn_task_arg_t *a = (conn_task_arg_t *)arg;
-    a->lst->handler(a->conn, &a->sess, a->lst->arg);
+    a->listener->handler(a->conn, &a->sess, a->listener->arg);
     a->conn->ops->release(a->conn);
     free(a);
     vTaskDelete(NULL);
 }
 
-void s419_established(s419_tcb *t)
+/* Called in the tcpip thread once the three-way handshake completes. */
+void s419_established(s419_tcb *tcb)
 {
-    const s419_listener_t *lst = t->listener;
-    if (!lst || !lst->handler) {
-        t->dead = true;
-        return;
-    }
+    tcb->app_attached = true;
+    tcb->rx_sem = xSemaphoreCreateCounting(S419_RX_CAP, 0);
+    tcb->tx_sem = xSemaphoreCreateCounting(64, 0);
 
-    t->rx_sem = xSemaphoreCreateBinary();
-    t->tx_sem = xSemaphoreCreateBinary();
-    mp_conn_t *conn = calloc(1, sizeof(*conn));
+    mp_conn_t *conn = tcb->conn = calloc(1, sizeof(*conn));
     conn_task_arg_t *a = calloc(1, sizeof(*a));
-    if (!t->rx_sem || !t->tx_sem || !conn || !a) {
-        ESP_LOGE(TAG, "%s: out of memory accepting connection", lst->name);
+    if (!tcb->rx_sem || !tcb->tx_sem || !conn || !a) {
+        ESP_LOGE(TAG, "cannot accept %s: out of memory", tcb->listener->name);
         free(conn);
         free(a);
-        t->dead = true; /* tick reaps: no app attached */
+        s419_tcp_abort(tcb);
         return;
     }
 
     conn->ops = &s_conn_ops;
-    conn->ctx = t;
-    t->conn = conn;
-    t->app_attached = true;
+    conn->ctx = tcb;
 
     a->conn = conn;
-    a->tcb = t;
-    a->lst = lst;
+    a->listener = tcb->listener;
     a->sess.sock = -1;
-    a->sess.src_ip = t->rip;
-    a->sess.src_port = (uint16_t)((t->rport >> 8) | (t->rport << 8));
-    a->sess.dst_ip = t->lip;
-    a->sess.dst_port = (uint16_t)((t->lport >> 8) | (t->lport << 8));
-    a->sess.start_us = esp_timer_get_time();
+    a->sess.src_ip = tcb->rip;   /* host-order numeric, like the session API */
+    a->sess.src_port = tcb->rport;
+    a->sess.dst_ip = tcb->lip;
+    a->sess.dst_port = tcb->lport;
     a->sess.id = mp_session_next_id();
+    a->sess.start_us = esp_timer_get_time();
 
     char task_name[16];
-    snprintf(task_name, sizeof(task_name), "%s-%u", lst->name,
+    snprintf(task_name, sizeof(task_name), "%s-%u", tcb->listener->name,
              (unsigned)(a->sess.id & 0xff));
     if (xTaskCreate(conn_task, task_name, S419_CONN_TASK_STACK, a,
                     S419_CONN_TASK_PRIO, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "%s: failed to spawn connection task", lst->name);
-        t->app_attached = false;
+        ESP_LOGE(TAG, "cannot spawn %s task", tcb->listener->name);
         free(conn);
         free(a);
-        t->dead = true;
+        s419_tcp_abort(tcb);
     }
 }
 
 /* --------------------------------------------------------------- listen */
 
-static esp_err_t s419_backend_listen(const mp_listener_cfg_t *cfg)
+static esp_err_t s419_listen(const mp_listener_cfg_t *cfg)
 {
+    /* vaddr filtering (virtual IPs) arrives with phase 2; today the engine
+     * answers on the station address only. */
+    (void)cfg->vaddr;
     return s419_listener_add(cfg->port, cfg->name, cfg->handler, cfg->arg);
 }
 
 const mp_xport_backend_t mp_xport_s419 = {
     .name = "s419",
-    .listen = s419_backend_listen,
+    .listen = s419_listen,
 };

@@ -11,7 +11,8 @@
  * byte layouts stay auditable against the 4.19 sources they mirror.
  *
  * All builders write a complete IPv4 packet (header + payload) into @p out
- * and return its total length.
+ * and return its total length. Addresses are host-order uint32 (0xC0A80105
+ * is 192.168.1.5) and ports host order; builders serialize big-endian.
  * ---------------------------------------------------------------------- */
 
 #define S419_IP_HLEN   20
@@ -42,15 +43,12 @@ void s419_put_ip(uint8_t *out, uint16_t total_len, uint16_t id, bool df,
  * When @p ece, the ECE flag is set (Linux answers an ECN-requesting SYN
  * with ECE in the SYN-ACK — nmap ECN test CC=Y).
  *
- * @p offer_ws mirrors the RFC 7323 rule that window scaling is only
- * advertised when the peer's SYN offered it.
- *
  * @return full packet length.
  */
 size_t s419_build_synack(uint8_t *out, const mp_s419_params_t *par,
                          uint32_t src_nbo, uint32_t dst_nbo,
                          uint16_t sport_nbo, uint16_t dport_nbo,
-                         uint32_t seq, uint32_t ack, bool ece, bool offer_ws);
+                         uint32_t seq, uint32_t ack, bool ece);
 
 /**
  * Generic TCP segment without options (data, ACK, RST, FIN).
