@@ -31,6 +31,9 @@ uint32_t mp_net_get_ip(void);
  *  command output (e.g. ifconfig HWaddr) consistent with the wire. */
 void mp_net_get_mac(uint8_t out[6]);
 
+/** True once the wall clock has been set from NTP. */
+bool mp_net_time_synced(void);
+
 /** Human readable device IPv4, e.g. "192.168.1.42". */
 void mp_net_get_ip_str(char *buf, size_t len);
 

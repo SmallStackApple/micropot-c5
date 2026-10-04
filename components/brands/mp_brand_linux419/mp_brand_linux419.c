@@ -12,6 +12,7 @@
 
 #include "mp_brand_linux419.h"
 #include "mp_http_behavior.h"
+#include "mp_httpd_behavior.h"
 #include "mp_net.h"
 #include "mp_s419_params.h"
 #include "mp_ssh_behavior.h"
@@ -181,6 +182,21 @@ static const mp_http_behavior_t s_http = {
     .n_routes = 0,
 };
 
+/* Apache 2.4.38 style, generic (no distro suffix). The mp_httpd service
+ * implements the protocol; these are the persona's pages and credentials. */
+static const mp_httpd_behavior_t s_httpd = {
+    .server_hdr = "Apache/2.4.38",
+    .realm = "Restricted Area",
+    .hostname = "linux",
+    .login_html = (const char *)linux_login_html_start,
+    .fail_html = (const char *)linux_fail_html_start,
+    .admin_html = (const char *)linux_admin_html_start,
+    .creds = s_creds,
+    .n_creds = sizeof(s_creds) / sizeof(s_creds[0]),
+    .keepalive_ms = 5000,
+    .max_requests = 100,
+};
+
 /* -------------------------------------------------------------- metadata */
 
 static const mp_brand_meta_t s_meta = {
@@ -281,6 +297,7 @@ static const mp_ssh_behavior_t s_ssh = {
 static const mp_brand_behavior_entry_t s_behaviors[] = {
     { "telnet",   &s_telnet },
     { "http",     &s_http   },
+    { "httpd",    &s_httpd  },
     { "ssh",      &s_ssh    },
     /* Drives the mp_stack419 engine when this persona runs on it: the
      * kernel personality (TTL, MSS, window, option layout, ISN, timers)

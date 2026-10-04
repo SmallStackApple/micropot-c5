@@ -386,16 +386,6 @@ static void core_up(void *ctx)
              s419_par->wscale, s419_par->timestamps);
 }
 
-static void core_down(void *ctx)
-{
-    (void)ctx;
-    if (s_pcb_tcp)  { raw_remove(s_pcb_tcp);  s_pcb_tcp = NULL; }
-    if (s_pcb_udp)  { raw_remove(s_pcb_udp);  s_pcb_udp = NULL; }
-    if (s_pcb_icmp) { raw_remove(s_pcb_icmp); s_pcb_icmp = NULL; }
-    if (s_pcb_tx)   { raw_remove(s_pcb_tx);   s_pcb_tx = NULL; }
-    s_ready = false;
-}
-
 void s419_core_init(const mp_s419_params_t *params)
 {
     s419_par = params;
