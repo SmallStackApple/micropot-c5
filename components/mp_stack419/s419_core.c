@@ -57,7 +57,10 @@ int64_t s419_now_ms(void)
 
 uint32_t s419_our_ip(void)
 {
-    return mp_net_get_ip(); /* network byte order, 0 before DHCP */
+    /* mp_net stores lwIP's address word (first octet in the low byte on
+     * little-endian); the engine's numeric domain reads packet fields
+     * big-endian, so swap once here. */
+    return PP_HTONL(mp_net_get_ip()); /* 0 before DHCP */
 }
 
 uint16_t s419_icmp_ipid(void)

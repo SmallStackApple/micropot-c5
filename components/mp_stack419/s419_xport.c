@@ -125,10 +125,12 @@ bool s419_established(s419_tcb *tcb)
     a->tcb = tcb;
     a->conn = conn;
     a->sess.sock = -1;
-    a->sess.src_ip = tcb->rip;
-    a->sess.src_port = lwip_ntohs(tcb->rport);
-    a->sess.dst_ip = tcb->lip;
-    a->sess.dst_port = lwip_ntohs(tcb->lport);
+    /* TCB addresses are big-endian numerics (packet-read domain); mp_session
+     * follows the lwIP convention (first octet in the low byte). */
+    a->sess.src_ip = PP_HTONL(tcb->rip);
+    a->sess.src_port = tcb->rport;
+    a->sess.dst_ip = PP_HTONL(tcb->lip);
+    a->sess.dst_port = tcb->lport;
     a->sess.start_us = esp_timer_get_time();
     a->sess.id = mp_session_next_id();
 
