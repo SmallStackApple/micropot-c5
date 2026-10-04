@@ -366,7 +366,9 @@ static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (icmp[0] != 8 || icmp[1] != 0) {
         return 0; /* only echo requests are ours (nmap IE test) */
     }
-    uint8_t pkt[S419_MAX_PKT];
+    /* tcpip-thread scratch: the callback chain is serial, and the default
+     * tcpip task stack (3 KB) cannot hold this on the stack */
+    static uint8_t pkt[S419_MAX_PKT];
     size_t n = s419_build_icmp_echo_reply(pkt, ip, p->tot_len,
                                           s419_icmp_ipid(), s419_par);
     if (n) {

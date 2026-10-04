@@ -13,6 +13,10 @@ CONFIG_SPIRAM_USE_MALLOC=y
 
 # --- Networking: more sockets for concurrent honeypot services + logger ----
 CONFIG_LWIP_MAX_SOCKETS=16
+# mp_stack419 crafts and sends packets from the lwIP tcpip thread; give that
+# task room for the deeper call chain (software crypto + shell callbacks
+# also run in connection tasks, not here).
+CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=8192
 
 # --- lwIP defaults ---------------------------------------------------------
 # The linux_419 persona does NOT depend on these: its wire personality is

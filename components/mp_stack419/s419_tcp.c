@@ -206,7 +206,9 @@ static void flush_tx(s419_tcb *tcb)
         if (chunk > usable) {
             chunk = usable;
         }
-        uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN + 1460];
+        /* tcpip-thread scratch (see on_icmp): keep the 1.5 KB packet off
+         * the 3 KB tcpip task stack */
+        static uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN + 1460];
         size_t n = s419_build_tcp(pkt, s419_par, tcb->lip, tcb->rip,
                                   tcb->lport, tcb->rport, tcb->snd_nxt,
                                   tcb->rcv_nxt, S419_ACK | S419_PSH,
@@ -277,7 +279,7 @@ static void retransmit(s419_tcb *tcb)
     if (len > tcb->peer_mss) {
         len = tcb->peer_mss;
     }
-    uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN + 1460];
+    static uint8_t pkt[S419_IP_HLEN + S419_TCP_HLEN + 1460];
     size_t n = s419_build_tcp(pkt, s419_par, tcb->lip, tcb->rip,
                               tcb->lport, tcb->rport, tcb->snd_una,
                               tcb->rcv_nxt, S419_ACK | S419_PSH,
