@@ -37,13 +37,27 @@ static const char s_group[] =
 
 /* sha512crypt-looking placeholders; the point is that the file exists,
  * is root-readable, and looks worth cracking. */
+/* Genuine sha512crypt of the working credentials — john must crack the
+ * shadow into exactly the passwords ssh/telnet/ftp accept, or the story
+ * falls apart. (The previous hashes were invented strings with a certain
+ * YouTube video ID sewn in; fun, but uncrackable and malformed.) */
 static const char s_shadow[] =
-    "root:$6$Xk9f2mQp$dQw4w9WgXcQz7YvN2kL8sJhF3mR5tP6xA1zB9cV7nM2kQ8wE4rT6yU1iO3pA5sD7fG9hJ2kL4zX6cV8bN0m:18345:0:99999:7:::\n"
+    "root:$6$Xk9f2mQpA7sT$/WShsfJ9k7N24ZKJ2yKwnSpNGNjbdgPbbi8UL73nnNPB2/Kwytmespmf2ULuAJf11.Zs4cLQGpijWdHyOhev3.:18345:0:99999:7:::\n"
     "daemon:*:18345:0:99999:7:::\n"
     "bin:*:18345:0:99999:7:::\n"
+    "sys:*:18345:0:99999:7:::\n"
+    "sync:*:18345:0:99999:7:::\n"
+    "games:*:18345:0:99999:7:::\n"
+    "man:*:18345:0:99999:7:::\n"
+    "lp:*:18345:0:99999:7:::\n"
+    "mail:*:18345:0:99999:7:::\n"
+    "news:*:18345:0:99999:7:::\n"
+    "proxy:*:18345:0:99999:7:::\n"
     "www-data:*:18345:0:99999:7:::\n"
+    "backup:*:18345:0:99999:7:::\n"
+    "nobody:*:18345:0:99999:7:::\n"
     "sshd:*:18345:0:99999:7:::\n"
-    "admin:$6$mZ3vN8xL$kL8sJhF3mR5tP6xA1zB9cV7nM2kQ8wE4rT6yU1iO3pA5sD7fG9hJ2kL4zX6cV8bN0mQ3wE5rT8yU2iO6p:18345:0:99999:7:::\n";
+    "admin:$6$mZ3vN8xL4bRq$MX3Q5QU1GgSXDWuw3vfA5nrBgymfXGJjnKx7Y25H4xg555cJJfZeugBtPsGebLMiaZyrk0TJOh16YXsZcdpGa1:18345:0:99999:7:::\n";
 
 static const char s_hostname[] = "linux\n";
 
