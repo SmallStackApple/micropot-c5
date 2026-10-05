@@ -174,12 +174,12 @@ static const char s_bash_history[] =
 static const char s_www_index[] =
     "<html><body><h1>It works!</h1></body></html>\n";
 
+/* Keep it unbranded: Debian's stock motd paragraph (the "programs included
+ * ... free software ... doc/<pkg>/copyright" wording) is instantly
+ * recognizable even with the distro name scrubbed. A custom or minimal
+ * Linux install ships an empty or one-line motd. */
 static const char s_motd[] =
-    "Linux linux 4.19.0 #1 SMP x86_64 GNU/Linux\n"
-    "\n"
-    "The programs included with the Linux system are free software;\n"
-    "the exact distribution terms for each program are described in the\n"
-    "individual files in /usr/share/doc/*/copyright.\n";
+    "Linux linux 4.19.0 #1 SMP x86_64 GNU/Linux\n";
 
 #define D(path)      { path, MPFS_DIR, NULL, "drwxr-xr-x", "root", "root", 4096, "Oct  1 09:00" }
 #define F(path, ...) { path, MPFS_FILE, __VA_ARGS__ }

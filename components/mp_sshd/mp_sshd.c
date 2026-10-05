@@ -69,6 +69,15 @@ static const char s_key_list[] =
 static mp_listener_cfg_t s_listener;
 static WOLFSSH_CTX *s_ctx;
 
+/* OpenSSH MaxStartups-style early drop, but for a real reason here:
+ * each in-flight KEX wants tens of KiB (RSA tfm bignums, wolfSSH IO
+ * buffers, the conn task's 8 KiB stack) and hydra -t 8 drove the heap
+ * minimum to 7 KiB. Past the cap the connection closes before the
+ * banner, exactly like an overloaded sshd (clients and hydra just
+ * retry, which is what real scans look like too). */
+#define PREAUTH_MAX 3
+static volatile int s_preauth;
+
 /* -------------------------------------------------------- per-connection */
 
 typedef struct {
@@ -243,6 +252,13 @@ static void sshd_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
 
     log_evt(sess, "ssh.connect", NULL, NULL);
 
+    if (s_preauth >= PREAUTH_MAX) {
+        ESP_LOGD(TAG, "pre-auth cap (%d) reached, dropping", PREAUTH_MAX);
+        return; /* peer retries, like against MaxStartups */
+    }
+    __sync_fetch_and_add(&s_preauth, 1);
+    bool counted = true;
+
     sshd_conn_t c = {
         .raw = conn,
         .sess = sess,
@@ -281,6 +297,8 @@ static void sshd_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
             goto done; /* auth exhausted / protocol error / peer gone */
         }
     }
+    __sync_fetch_and_sub(&s_preauth, 1);
+    counted = false; /* authenticated: no longer pre-auth pressure */
 
     log_evt(sess, "ssh.login", "user", c.user);
 
@@ -297,6 +315,9 @@ static void sshd_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
     }
 
 done:
+    if (counted) {
+        __sync_fetch_and_sub(&s_preauth, 1);
+    }
     if (c.ssh) {
         wolfSSH_free(c.ssh);
     }
