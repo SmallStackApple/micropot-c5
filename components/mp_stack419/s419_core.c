@@ -19,6 +19,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 
 #include "mp_log.h"
@@ -337,8 +338,9 @@ static u8_t on_udp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (dport >= S419_EPHEMERAL_MIN || dport == UDP_PORT_DHCP_CLIENT) {
         return 0; /* lwIP traffic (DNS/NTP/DHCP client) */
     }
-    /* UDP to a closed port: ICMP port unreachable (nmap U1 test) */
-    uint8_t pkt[128];
+    /* UDP to a closed port: ICMP port unreachable (nmap U1 test). The
+     * buffer must fit the fully-quoted offending packet (up to 576). */
+    uint8_t pkt[600];
     size_t n = s419_build_icmp_unreach(pkt, ip, p->tot_len, s419_icmp_ipid(),
                                        ip_dst, s419_rd32(ip + 12), s419_par);
     if (n) {
@@ -362,9 +364,12 @@ static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
         return 0;
     }
     const uint8_t *icmp = ip + ihl;
-    if (icmp[0] != 8 || icmp[1] != 0) {
-        return 0; /* only echo requests are ours (nmap IE test) */
+    if (icmp[0] != 8) {
+        return 0; /* only echo requests are ours */
     }
+    /* Linux 4.19 answers echo requests with ANY code and copies the code
+     * into the reply (icmp_reply reuses the received icmp_bxm) — nmap's
+     * IE(1) probe uses code 9 and expects R=Y, CD=S. */
     ESP_LOGI(TAG, "rx ICMP echo from %lu.%lu.%lu.%lu",
              (unsigned long)(s419_rd32(ip + 12) >> 24),
              (unsigned long)((s419_rd32(ip + 12) >> 16) & 0xff),
@@ -406,6 +411,7 @@ static void core_up(void *ctx)
     raw_recv(s_pcb_tcp, on_tcp, NULL);
     raw_recv(s_pcb_udp, on_udp, NULL);
     raw_recv(s_pcb_icmp, on_icmp, NULL);
+    s_icmp_id = (uint16_t)esp_random(); /* natural, non-zero counter start */
     sys_timeout(10, s419_tick, NULL);
     ESP_LOGI(TAG, "stack419 engine up (ttl=%u mss=%u wnd=%u wscale=%u ts=%d)",
              s419_par->ttl, s419_par->mss, s419_par->rcv_wnd,

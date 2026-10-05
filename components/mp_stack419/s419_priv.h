@@ -73,6 +73,7 @@ typedef struct s419_tcb {
     uint16_t peer_mss;
     uint8_t  peer_wscale;
     bool     peer_ws_ok;
+    bool     peer_sack_ok;  /* SYN offered SACK-permitted (mirror in SYN-ACK) */
     uint32_t peer_wnd;      /* bytes, already scaled */
 
     /* sequence space */

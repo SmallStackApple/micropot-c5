@@ -136,27 +136,31 @@ void s419_tcp_set_cksum(uint8_t *pkt, size_t tcp_len)
 size_t s419_build_synack(uint8_t *out, const mp_s419_params_t *par,
                          uint32_t src_nbo, uint32_t dst_nbo,
                          uint16_t sport_nbo, uint16_t dport_nbo,
-                         uint32_t seq, uint32_t ack, bool ece)
+                         uint32_t seq, uint32_t ack, bool ece,
+                         bool sack_offered, bool ws_offered)
 {
-    /* tcp_options_write(), timestamps disabled, SACK + WSCALE on:
-     *   word1: 02 04 mss          (MSS)
-     *   word2: 01 01 04 02        (NOP NOP SACK_PERM)
-     *   word3: 01 03 03 ws        (NOP WSCALE)
-     * on the wire: M5B4 N N S N W6  ==  nmap OPS "M5B4NNSNW6". */
+    /* tcp_options_write() (net/ipv4/tcp_output.c), timestamps disabled:
+     * options are mirrored only when the SYN offered them — nmap's O3
+     * probe offers no SACK (answer M5B4NW6) and O6 offers no WScale
+     * (answer M5B4NNS); with both offered: M5B4NNSNW6.
+     *   word1: 02 04 mss          (MSS, always)
+     *   word2: 01 01 04 02        (NOP NOP SACK_PERM, iff offered)
+     *   word3: 01 03 03 ws        (NOP WSCALE, iff offered)
+     * (A TS block would sit between SACK and WSCALE; the persona targets
+     * TS=U, so timestamps are never emitted.) */
     uint8_t opts[12];
     size_t n = 0;
     opts[n++] = 0x02; opts[n++] = 0x04;
     opts[n++] = (uint8_t)(par->mss >> 8);
     opts[n++] = (uint8_t)par->mss;
-    if (par->sack_perm) {
+    if (par->sack_perm && sack_offered) {
         opts[n++] = 0x01; opts[n++] = 0x01;
         opts[n++] = 0x04; opts[n++] = 0x02;
-    } else {
-        opts[n++] = 0x01; opts[n++] = 0x01;
-        opts[n++] = 0x01; opts[n++] = 0x01;
     }
-    opts[n++] = 0x01; opts[n++] = 0x03; opts[n++] = 0x03;
-    opts[n++] = par->wscale;
+    if (ws_offered) {
+        opts[n++] = 0x01; opts[n++] = 0x03; opts[n++] = 0x03;
+        opts[n++] = par->wscale;
+    }
 
     uint8_t flags = S419_SYN | S419_ACK | (ece ? S419_ECE : 0);
     size_t tcp_len = put_tcp(out, src_nbo, dst_nbo, sport_nbo, dport_nbo,
@@ -213,10 +217,12 @@ size_t s419_build_icmp_unreach(uint8_t *out, const uint8_t *bad,
                                uint32_t src_nbo, uint32_t dst_nbo,
                                const mp_s419_params_t *par)
 {
-    /* icmp_send(): quote the original IP header and 8 bytes of its data. */
+    /* icmp_send() (net/ipv4/icmp.c): quote as much of the offending
+     * datagram as fits within the minimum MTU — in practice the whole
+     * packet (nmap's 328-byte UDP probe -> IPL=0x164). */
     size_t quote = bad_len;
-    if (quote > S419_IP_HLEN + 8) {
-        quote = S419_IP_HLEN + 8;
+    if (quote > 576 - S419_IP_HLEN - 8) {
+        quote = 576 - S419_IP_HLEN - 8;
     }
     uint8_t *icmp = out + S419_IP_HLEN;
     icmp[0] = 3; /* destination unreachable */

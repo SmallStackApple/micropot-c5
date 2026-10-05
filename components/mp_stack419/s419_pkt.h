@@ -40,8 +40,11 @@ void s419_put_ip(uint8_t *out, uint16_t total_len, uint16_t id, bool df,
 
 /**
  * SYN-ACK with the 4.19 tcp_options_write() layout (net/ipv4/tcp_output.c):
- * with timestamps off and SACK on, the emitted words are exactly
- *   MSS | NOP NOP SACK_PERM | NOP WSCALE        (nmap OPS "MxxxxNNSNWx")
+ * SACK-permitted and WScale blocks are emitted only when the SYN offered
+ * them (timestamps are never emitted — the persona targets TS=U):
+ *   both offered : MSS | NOP NOP SACK_PERM | NOP WSCALE   ("MxxxxNNSNWx")
+ *   WS only      : MSS | NOP WSCALE                       ("MxxxxNWx")
+ *   SACK only    : MSS | NOP NOP SACK_PERM                ("MxxxxNNS")
  * When @p ece, the ECE flag is set (Linux answers an ECN-requesting SYN
  * with ECE in the SYN-ACK — nmap ECN test CC=Y).
  *
@@ -50,7 +53,8 @@ void s419_put_ip(uint8_t *out, uint16_t total_len, uint16_t id, bool df,
 size_t s419_build_synack(uint8_t *out, const mp_s419_params_t *par,
                          uint32_t src_nbo, uint32_t dst_nbo,
                          uint16_t sport_nbo, uint16_t dport_nbo,
-                         uint32_t seq, uint32_t ack, bool ece);
+                         uint32_t seq, uint32_t ack, bool ece,
+                         bool sack_offered, bool ws_offered);
 
 /**
  * Generic TCP segment without options (data, ACK, RST, FIN).

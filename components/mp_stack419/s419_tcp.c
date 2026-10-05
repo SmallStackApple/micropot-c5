@@ -63,7 +63,8 @@ static void send_synack(s419_tcb *tcb)
     uint8_t pkt[64];
     size_t n = s419_build_synack(pkt, s419_par, tcb->lip, tcb->rip,
                                  tcb->lport, tcb->rport,
-                                 tcb->iss, tcb->rcv_nxt, tcb->ecn);
+                                 tcb->iss, tcb->rcv_nxt, tcb->ecn,
+                                 tcb->peer_sack_ok, tcb->peer_ws_ok);
     s419_output(pkt, n, tcb->rip);
 }
 
@@ -139,8 +140,11 @@ static void parse_syn_options(s419_tcb *tcb, const uint8_t *opts, size_t len)
                 tcb->peer_wscale = opts[i + 2] > 14 ? 14 : opts[i + 2];
             }
             break;
+        case 4: /* SACK permitted: mirrored in the SYN-ACK */
+            tcb->peer_sack_ok = true;
+            break;
         default:
-            break; /* SACK/TS/etc: parsed, not acted on (TS=U target) */
+            break; /* TS/etc: parsed, not acted on (TS=U target) */
         }
         i += olen;
     }
