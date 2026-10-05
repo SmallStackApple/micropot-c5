@@ -311,6 +311,7 @@ static esp_err_t sshd_start(mp_service_t *svc)
             ESP_LOGE(TAG, "wolfSSH_Init failed");
             return ESP_FAIL;
         }
+        wolfSSH_Debugging_ON(); /* no-op unless built with WOLFSSH_DEBUG */
         s_ctx = wolfSSH_CTX_new(WOLFSSH_ENDPOINT_SERVER, NULL);
         if (!s_ctx) {
             ESP_LOGE(TAG, "wolfSSH_CTX_new failed");

@@ -15,3 +15,12 @@ for f in managed_components/wolfssl__wolfssl/include/user_settings.h \
         echo "patched: $f"
     fi
 done
+
+# Temporary diagnostics: wolfSSH WLOG to the console while we chase the
+# WS_MATCH_KEY_ALGO_E (-1051) negotiation failure. Remove once resolved.
+if ! grep -q 'define WOLFSSH_DEBUG' \
+        managed_components/wolfssl__wolfssl/include/user_settings.h; then
+    sed -i '1i #define WOLFSSH_DEBUG' \
+        managed_components/wolfssl__wolfssl/include/user_settings.h
+    echo "patched: WOLFSSH_DEBUG on"
+fi

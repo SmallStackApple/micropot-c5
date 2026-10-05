@@ -88,8 +88,9 @@ static const mp_brand_meta_t s_meta = {
     .model = "4.19",
     .firmware = "#1 SMP",
     .hostname = "linux",
-    /* QEMU/KVM virtual NIC: a generic "Linux 4.19" host is usually a VM. */
-    .mac_oui = { 0x52, 0x54, 0x00 },
+    /* Realtek GbE (00:e0:4c): the most common NIC vendor on consumer
+     * Linux boxes; a bare-metal host draws less attention than a VM OUI. */
+    .mac_oui = { 0x00, 0xe0, 0x4c },
 };
 
 /* ------------------------------------------------------------------ shell */
