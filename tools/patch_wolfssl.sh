@@ -24,3 +24,13 @@ if ! grep -q 'define DEBUG_WOLFSSH' \
         managed_components/wolfssl__wolfssl/include/user_settings.h
     echo "patched: DEBUG_WOLFSSH on"
 fi
+
+# wolfSSH 1.4.20 hard-disables rsa-sha2-512 ("not ready") unless this is
+# defined; without the name mapping, KEX host-key negotiation misfires
+# (see mp_sshd.c s_key_list comment).
+if ! grep -q 'define WOLFSSH_YES_RSA_SHA2_512' \
+        managed_components/wolfssl__wolfssl/include/user_settings.h; then
+    sed -i '1i #define WOLFSSH_YES_RSA_SHA2_512' \
+        managed_components/wolfssl__wolfssl/include/user_settings.h
+    echo "patched: WOLFSSH_YES_RSA_SHA2_512 on"
+fi

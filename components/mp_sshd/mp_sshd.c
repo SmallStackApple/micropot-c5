@@ -55,8 +55,16 @@ static const char s_cipher_list[] =
     "aes128-gcm@openssh.com,aes256-gcm@openssh.com";
 static const char s_mac_list[] =
     "hmac-sha2-256,hmac-sha2-512,hmac-sha1";
+/* OpenSSH 7.9p1's host key proposal (myproposal.h KEX_DEFAULT_PK_ALG)
+ * filtered to the algorithms of the loaded host keys (no certs, no
+ * ed25519). wolfSSH 1.4.20 needs WOLFSSH_YES_RSA_SHA2_512 for the
+ * rsa-sha2-512 name to exist at all — without it the name maps to
+ * ID_UNKNOWN, and because GetNameListRaw keeps an unknown FIRST entry,
+ * our canned list collided with the client's own unknown first entry
+ * (ssh-ed25519 / cert variants in modern OpenSSH) making MatchIdLists
+ * "match" ID_UNKNOWN == ID_UNKNOWN: WS_MATCH_KEY_ALGO_E (-1051). */
 static const char s_key_list[] =
-    "rsa-sha2-512,rsa-sha2-256,ssh-rsa,ecdsa-sha2-nistp256";
+    "ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256,ssh-rsa";
 
 static mp_listener_cfg_t s_listener;
 static WOLFSSH_CTX *s_ctx;
