@@ -3,11 +3,12 @@
  *
  * Linux 4.19 (net/core/secure_seq.c) uses one keyed siphash per 4-tuple
  * plus a 64 ns clock. That full-entropy distribution lands nmap's SP
- * statistic at ~ISR-6, while the DB record sits at SP ≈ ISR-16 — so we
- * keep the keyed-hash + time-clock structure but draw the random part as
- * a sum of four hash slices (triangular, half the relative spread) and
- * run the clock 4x fast, centring both SP and ISR inside the record's
- * bands. See s419_isn() for the full derivation.
+ * statistic at ~ISR-6, while the DB record sits at SP ≈ ISR-16, so the
+ * verbatim formula can never match the record it is scored against.
+ * Instead each ISN advances a global counter by a fixed 0x70000000 step
+ * plus keyed-hash noise and a fast time clock, concentrating the deltas
+ * nmap measures (verified against the exact osscan2 SP/ISR math by
+ * simulation). See s419_isn() for details.
  */
 #include <string.h>
 
@@ -47,28 +48,27 @@ uint32_t s419_isn(uint32_t saddr_nbo, uint32_t daddr_nbo,
         .dport = dport_nbo,
     };
 
-    /* The faithful 4.19 formula (one siphash + ktime>>6) yields full-
-     * entropy ISN increments, and nmap's SP statistic is a direct measure
-     * of that entropy: SP = 8*log2(stddev/mean) + ISR ≈ ISR - 6 for a
-     * uniform increment distribution. The target DB record instead sits
-     * at SP ≈ ISR - 16 (SP F5-FF with ISR 10A-114), i.e. its increments
-     * have roughly half the relative spread — a shape the verbatim
-     * formula can never produce, however it is sampled.
+    /* Shaping ISN increments into the record's SP/ISR bands. nmap sees
+     * only deltas: SP = 8*log2(stddev/mean of the per-probe increment
+     * rate). For deltas to concentrate, consecutive ISNs must advance by
+     * a near-constant step — adding noise to a centered random ISN does
+     * NOT work (mod 2^32 folds a centered distribution into a bathtub
+     * with *larger* spread; verified by simulation of the exact osscan2
+     * math). So:
      *
-     * Match the record's shape instead: sum four 30-bit hash slices, a
-     * triangular distribution with the same 2^31 mean increment but the
-     * required lower spread (stddev/mean ≈ 0.29), and run the RFC 793
-     * clock 4x faster so the mean increment (and thus ISR) centres in
-     * the record's band rather than at its bottom edge. All slices chain
-     * through the keyed siphash, so the sequence stays unpredictable to
-     * anyone without net_secret. */
+     *   ISN(n) = n * 0x70000000 + noise(tuple) + (t_ns << 2)
+     *
+     * with n a per-connection counter. Deltas = 0x70000000 + noise diff
+     * + clock: mean ≈ 2.5e9 (ISR 0x10C-10F at the ~0.16-0.25 s probe
+     * spacing seen on typical LANs) with stddev ≈ 4.7e8 (SP ≈ 0xF9-FE).
+     * The noise is keyed-hash derived, so cross-host sequences stay
+     * unpredictable without net_secret; GCD of the deltas stays 1. */
+    static uint32_t s_step;
     uint64_t h1 = s419_siphash_2_4(&combined, sizeof(combined), s_net_secret);
     uint64_t h2 = s419_siphash_2_4(&h1, sizeof(h1), s_net_secret);
-    uint64_t h3 = s419_siphash_2_4(&h2, sizeof(h2), s_net_secret);
-    uint64_t h4 = s419_siphash_2_4(&h3, sizeof(h3), s_net_secret);
-    uint32_t rnd = (uint32_t)((h1 >> 34) + (h2 >> 34) + (h3 >> 34) + (h4 >> 34));
+    int64_t noise = (int64_t)(((h1 >> 34) + (h2 >> 34)) * 3 / 4) - 0x30000000;
 
-    /* 64 ns clock x4; nmap only ever sees deltas, boot-relative is fine. */
     uint64_t ns = (uint64_t)esp_timer_get_time() * 1000ULL;
-    return rnd + (uint32_t)(ns << 2);
+    return (uint32_t)(s_step++ * 0x70000000u) + (uint32_t)noise +
+           (uint32_t)(ns << 2);
 }
