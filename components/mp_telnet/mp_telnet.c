@@ -68,9 +68,33 @@ static void telnet_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
 
     mp_log_telnet_connect(sess);
 
-    /* IAC WILL ECHO, IAC WILL SUPPRESS-GO-AHEAD */
-    const unsigned char init[] = { TELNET_IAC, 251, 1, TELNET_IAC, 251, 3 };
+    /* BSD/inetutils telnetd opens with option REQUESTS and then waits
+     * for the answers before printing anything (its negotiation timer
+     * outlasts a silent peer). This exact 12-byte burst, anchored, is
+     * what nmap's service DB calls "Linux telnetd" — our old greeting
+     * (WILL ECHO, WILL SGA, then straight into the banner) anchored to
+     * "Pocket CMD telnetd" instead. */
+    const unsigned char init[] = {
+        TELNET_IAC, 253, 24, /* DO TERMINAL-TYPE */
+        TELNET_IAC, 253, 32, /* DO TSPEED */
+        TELNET_IAC, 253, 35, /* DO XDISPLOC */
+        TELNET_IAC, 253, 39, /* DO NEW-ENVIRON */
+    };
     mp_send_all(conn, init, sizeof(init));
+    {
+        /* Drain the client's WILL/DO answers: a real client replies in
+         * one segment within ms; a silent peer (nmap's NULL probe) hits
+         * the negotiation timer, like against stock telnetd. */
+        unsigned char junk[96];
+        int r = mp_conn_recv(conn, junk, sizeof(junk), 10000);
+        while (r > 0) {
+            r = mp_conn_recv(conn, junk, sizeof(junk), 200);
+        }
+    }
+
+    /* IAC WILL ECHO, IAC WILL SUPPRESS-GO-AHEAD */
+    const unsigned char will[] = { TELNET_IAC, 251, 1, TELNET_IAC, 251, 3 };
+    mp_send_all(conn, will, sizeof(will));
 
     if (b->banner) {
         mp_send_str(conn, b->banner);
