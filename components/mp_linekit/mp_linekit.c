@@ -67,10 +67,25 @@ int mp_line_read(mp_conn_t *conn, char *buf, size_t cap, int timeout_ms,
             }
             continue;
         }
-        if (c == '\r' || c == 0) {
-            continue;
+        if (c == 0) {
+            continue; /* telnet CR NUL */
+        }
+        if (c == '\r') {
+            /* Enter. An ssh pty sends CR alone (on a real tty the line
+             * discipline maps it with icrnl); telnet sends CR LF — the
+             * LF is then absorbed by the bare-LF rule on the next call. */
+            if (echo == MP_LINE_ECHO_ON) {
+                mp_send_all(conn, "\r\n", 2);
+            }
+            buf[len] = '\0';
+            return (int)len;
         }
         if (c == '\n') {
+            /* Bare LF ends a line only once something was typed (piped
+             * input); at line start it is the LF of a telnet CR LF. */
+            if (!len) {
+                continue;
+            }
             if (echo == MP_LINE_ECHO_ON) {
                 mp_send_all(conn, "\r\n", 2);
             }

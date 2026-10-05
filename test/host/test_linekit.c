@@ -163,6 +163,38 @@ static void test_send_all(void)
     close(fds[0]);
 }
 
+static void test_read_cr_only_enter(void)
+{
+    /* ssh pty: Enter is a lone CR (a real tty would icrnl it) */
+    int fds[2];
+    CHECK(make_pair(fds) == 0);
+    write(fds[1], "id\r", 3);
+
+    char buf[32];
+    int n = mp_line_read(CONN, buf, sizeof(buf), 1000, false, MP_LINE_ECHO_ON);
+    CHECK(n == 2);
+    CHECK_STR(buf, "id");
+    close(fds[0]); close(fds[1]);
+}
+
+static void test_read_crlf_no_phantom_line(void)
+{
+    /* telnet CR LF: the LF must not surface as an empty line next call;
+     * a REAL second command after the CR LF must survive intact */
+    int fds[2];
+    CHECK(make_pair(fds) == 0);
+    write(fds[1], "id\r\nls\n", 7);
+
+    char buf[32];
+    int n = mp_line_read(CONN, buf, sizeof(buf), 1000, false, MP_LINE_ECHO_OFF);
+    CHECK(n == 2);
+    CHECK_STR(buf, "id");
+    n = mp_line_read(CONN, buf, sizeof(buf), 1000, false, MP_LINE_ECHO_OFF);
+    CHECK(n == 2);
+    CHECK_STR(buf, "ls");
+    close(fds[0]); close(fds[1]);
+}
+
 int main(void)
 {
     test_cmd_lookup();
@@ -170,6 +202,8 @@ int main(void)
     test_read_echo_and_backspace();
     test_read_strips_iac();
     test_read_timeout_and_close();
+    test_read_cr_only_enter();
+    test_read_crlf_no_phantom_line();
     test_send_all();
     TEST_SUMMARY("test_linekit");
 }
