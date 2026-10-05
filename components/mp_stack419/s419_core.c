@@ -62,6 +62,16 @@ uint32_t mp_s419_tick_count(void)
     return s_tick_count;
 }
 
+/* raw-PCB callback contract: returning 1 (RAW_INPUT_EATEN) transfers pbuf
+ * ownership to the callback — ip4_input() will NOT free it. We never keep
+ * input pbufs, so free on the spot. (Forgetting this leaked every
+ * intercepted packet and slowly starved the WiFi RX path of buffers.) */
+static uint8_t eat(struct pbuf *p)
+{
+    pbuf_free(p);
+    return 1;
+}
+
 int64_t s419_now_ms(void)
 {
     return esp_timer_get_time() / 1000;
@@ -263,7 +273,7 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     }
     size_t ip_len = s419_rd16(ip + 2);
     if (ip_len > p->tot_len || ihl + S419_TCP_HLEN > ip_len) {
-        return 1; /* truncated garbage for us: drop silently */
+        return eat(p); /* truncated garbage for us: drop silently */
     }
     const uint8_t *th = ip + ihl;
     size_t tcp_len = ip_len - ihl;
@@ -278,7 +288,7 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     s419_tcb *tcb = s419_tcb_find(ip_dst, ip_src, lport, rport);
     if (tcb) {
         s419_tcp_input(tcb, th, tcp_len, ip_src, ip_dst);
-        return 1;
+        return eat(p);
     }
 
     const s419_listener_t *lst = s419_listener_find(lport);
@@ -299,13 +309,13 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
                                  th, tcp_len);
             } /* SYN+FIN: discard (T3: R=N) */
         } /* other flag combos: discard (T2: R=N) */
-        return 1;
+        return eat(p);
     }
 
     if (!(flags & S419_RST)) {
         s419_tcp_closed_reset(ip_dst, ip_src, lport, rport, th, tcp_len);
     }
-    return 1;
+    return eat(p);
 }
 
 static u8_t on_udp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
@@ -334,7 +344,7 @@ static u8_t on_udp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (n) {
         s419_output(pkt, n, s419_rd32(ip + 12));
     }
-    return 1;
+    return eat(p);
 }
 
 static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
@@ -366,7 +376,7 @@ static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (n) {
         s419_output(pkt, n, s419_rd32(ip + 12));
     }
-    return 1;
+    return eat(p);
 }
 
 /* ----------------------------------------------------------------- timer */
