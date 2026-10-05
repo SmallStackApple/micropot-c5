@@ -39,10 +39,11 @@ static const char s_group[] =
  * is root-readable, and looks worth cracking. */
 /* Genuine sha512crypt of the working credentials — john must crack the
  * shadow into exactly the passwords ssh/telnet/ftp accept, or the story
- * falls apart. (The previous hashes were invented strings with a certain
- * YouTube video ID sewn in; fun, but uncrackable and malformed.) */
+ * falls apart. The easter egg lives in the SALTS (fully valid, up to 16
+ * chars of [a-zA-Z0-9./]): root salts with a certain YouTube video ID,
+ * admin with what it promises. */
 static const char s_shadow[] =
-    "root:$6$Xk9f2mQpA7sT$/WShsfJ9k7N24ZKJ2yKwnSpNGNjbdgPbbi8UL73nnNPB2/Kwytmespmf2ULuAJf11.Zs4cLQGpijWdHyOhev3.:18345:0:99999:7:::\n"
+    "root:$6$dQw4w9WgXcQ$3DMxPHyU8RNWcAE2zGUcDSdoR0lZo76uNi/osxPiOuAEoVUjUZ59ixE7UtAVIJNDBIYNzyN4UencdDcLHCZhP.:18345:0:99999:7:::\n"
     "daemon:*:18345:0:99999:7:::\n"
     "bin:*:18345:0:99999:7:::\n"
     "sys:*:18345:0:99999:7:::\n"
@@ -57,7 +58,7 @@ static const char s_shadow[] =
     "backup:*:18345:0:99999:7:::\n"
     "nobody:*:18345:0:99999:7:::\n"
     "sshd:*:18345:0:99999:7:::\n"
-    "admin:$6$mZ3vN8xL4bRq$MX3Q5QU1GgSXDWuw3vfA5nrBgymfXGJjnKx7Y25H4xg555cJJfZeugBtPsGebLMiaZyrk0TJOh16YXsZcdpGa1:18345:0:99999:7:::\n";
+    "admin:$6$g1v3y0uup$5bJUmpHR/KFyTE0y9m78/Fr5bt..Y7W6S4UZiBzwI5aMOfdeZ4pG3BI1HXBrQpr.fr40prxWAbn2.h5TqpThW0:18345:0:99999:7:::\n";
 
 static const char s_hostname[] = "linux\n";
 
