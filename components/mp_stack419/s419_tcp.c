@@ -333,7 +333,10 @@ static void flush(s419_tcb *tcb)
         portENTER_CRITICAL(&tcb->lock);
         memcpy(pkt + tcp_len - n, tcb->txbuf + data_flight, n);
         portEXIT_CRITICAL(&tcb->lock);
-        s419_tcp_set_cksum(pkt, tcp_len);
+        /* build_tcp's return includes the IP header; set_cksum wants the
+         * bare TCP segment length (its build-time sum covered an unstaged
+         * payload area, so it must be redone now). */
+        s419_tcp_set_cksum(pkt, tcp_len - S419_IP_HLEN);
         s419_output(pkt, tcp_len, tcb->rip);
 
         tcb->snd_nxt += n;
@@ -675,7 +678,8 @@ static void retransmit(s419_tcb *tcb)
             portENTER_CRITICAL(&tcb->lock);
             memcpy(pkt + tcp_len - n, tcb->txbuf, n);
             portEXIT_CRITICAL(&tcb->lock);
-            s419_tcp_set_cksum(pkt, tcp_len);
+            /* same contract as flush(): strip the IP header length */
+            s419_tcp_set_cksum(pkt, tcp_len - S419_IP_HLEN);
             s419_output(pkt, tcp_len, tcb->rip);
             tcb->meas_ok = false; /* Karn: no RTT sample off retransmits */
         } else if (tcb->fin_sent && !tcb->fin_acked) {

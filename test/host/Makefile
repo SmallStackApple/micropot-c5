@@ -12,9 +12,11 @@ INC := -Istubs \
        -I$(ROOT)/components/mp_core/include \
        -I$(ROOT)/components/mp_log/include \
        -I$(ROOT)/components/mp_http/include \
-       -I$(ROOT)/components/mp_linekit/include
+       -I$(ROOT)/components/mp_linekit/include \
+       -I$(ROOT)/components/mp_stack419/include \
+       -I$(ROOT)/components/mp_stack419
 
-TESTS := test_evt test_form test_linekit
+TESTS := test_evt test_form test_linekit test_s419pkt
 
 all: run
 
@@ -26,6 +28,10 @@ test_form: test_form.c $(ROOT)/components/mp_http/mp_form.c test_util.h
 
 test_linekit: test_linekit.c $(ROOT)/components/mp_linekit/mp_linekit.c test_util.h
 	$(CC) $(CFLAGS) $(INC) -o $@ $< $(ROOT)/components/mp_linekit/mp_linekit.c
+
+test_s419pkt: test_s419pkt.c $(ROOT)/components/mp_stack419/s419_pkt.c test_util.h
+	$(CC) $(CFLAGS) -Wno-unused-parameter -Wno-unused-function $(INC) \
+	    -o $@ $< $(ROOT)/components/mp_stack419/s419_pkt.c
 
 run: $(TESTS)
 	@status=0; \
