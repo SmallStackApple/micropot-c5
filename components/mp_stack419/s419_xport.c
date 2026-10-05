@@ -24,7 +24,10 @@
 
 static const char *TAG = "s419_xport";
 
-#define S419_CONN_TASK_STACK 4096
+/* Per-connection task stack. mp_httpd nests ~3.5KB of response buffers
+ * (hdr/body/canned error pages) across its call chain and picolibc's
+ * snprintf adds a fat frame on top — 4KB overflowed under nmap -sV. */
+#define S419_CONN_TASK_STACK 8192
 #define S419_CONN_TASK_PRIO  5
 
 /* ------------------------------------------------------------ conn ops */
