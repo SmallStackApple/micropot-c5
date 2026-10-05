@@ -325,6 +325,13 @@ static esp_err_t sshd_start(mp_service_t *svc)
             ESP_LOGE(TAG, "wolfSSH_CTX_new failed");
             return ESP_ERR_NO_MEM;
         }
+        /* wolfSSH's default per-channel input buffer is 128 KiB
+         * (DEFAULT_WINDOW_SZ) — that allocation fails next to KEX working
+         * memory on the C5 (observed: ChannelNew -> "resource shortage"
+         * right after a successful login). An interactive shell trickles
+         * bytes; 16 KiB window / 16 KiB max packet is generous, and scp
+         * uploads still work, just at a calmer throughput. */
+        wolfSSH_CTX_SetWindowPacketSize(s_ctx, 16384, 16384);
 
         char proto_id[64];
         snprintf(proto_id, sizeof(proto_id), "%s\r\n", b->banner);
