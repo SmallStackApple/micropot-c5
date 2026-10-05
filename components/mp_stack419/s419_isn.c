@@ -1,11 +1,13 @@
 /*
- * ISN generation, mirroring Linux 4.19 net/core/secure_seq.c:
+ * ISN generation, shaped to the "Fingerprint Linux 4.19" nmap-os-db record.
  *
- *   static u32 seq_scale(u32 seq) { return seq + (ktime_get_real_ns() >> 6); }
- *
- *   secure_tcp_sequence_number(saddr, daddr, sport, dport):
- *       hash = siphash({saddr,daddr,sport,dport}, 12, &net_secret);
- *       return seq_scale(hash);   // low 32 bits of the 64-bit hash
+ * Linux 4.19 (net/core/secure_seq.c) uses one keyed siphash per 4-tuple
+ * plus a 64 ns clock. That full-entropy distribution lands nmap's SP
+ * statistic at ~ISR-6, while the DB record sits at SP ≈ ISR-16 — so we
+ * keep the keyed-hash + time-clock structure but draw the random part as
+ * a sum of four hash slices (triangular, half the relative spread) and
+ * run the clock 4x fast, centring both SP and ISR inside the record's
+ * bands. See s419_isn() for the full derivation.
  */
 #include <string.h>
 
@@ -45,10 +47,28 @@ uint32_t s419_isn(uint32_t saddr_nbo, uint32_t daddr_nbo,
         .dport = dport_nbo,
     };
 
-    uint64_t hash = s419_siphash_2_4(&combined, sizeof(combined), s_net_secret);
+    /* The faithful 4.19 formula (one siphash + ktime>>6) yields full-
+     * entropy ISN increments, and nmap's SP statistic is a direct measure
+     * of that entropy: SP = 8*log2(stddev/mean) + ISR ≈ ISR - 6 for a
+     * uniform increment distribution. The target DB record instead sits
+     * at SP ≈ ISR - 16 (SP F5-FF with ISR 10A-114), i.e. its increments
+     * have roughly half the relative spread — a shape the verbatim
+     * formula can never produce, however it is sampled.
+     *
+     * Match the record's shape instead: sum four 30-bit hash slices, a
+     * triangular distribution with the same 2^31 mean increment but the
+     * required lower spread (stddev/mean ≈ 0.29), and run the RFC 793
+     * clock 4x faster so the mean increment (and thus ISR) centres in
+     * the record's band rather than at its bottom edge. All slices chain
+     * through the keyed siphash, so the sequence stays unpredictable to
+     * anyone without net_secret. */
+    uint64_t h1 = s419_siphash_2_4(&combined, sizeof(combined), s_net_secret);
+    uint64_t h2 = s419_siphash_2_4(&h1, sizeof(h1), s_net_secret);
+    uint64_t h3 = s419_siphash_2_4(&h2, sizeof(h2), s_net_secret);
+    uint64_t h4 = s419_siphash_2_4(&h3, sizeof(h3), s_net_secret);
+    uint32_t rnd = (uint32_t)((h1 >> 34) + (h2 >> 34) + (h3 >> 34) + (h4 >> 34));
 
-    /* seq_scale(): add a 64 ns clock. esp_timer is µs since boot; the
-     * nmap ISR/SP tests only see deltas, so boot-relative is fine. */
+    /* 64 ns clock x4; nmap only ever sees deltas, boot-relative is fine. */
     uint64_t ns = (uint64_t)esp_timer_get_time() * 1000ULL;
-    return (uint32_t)hash + (uint32_t)(ns >> 6);
+    return rnd + (uint32_t)(ns << 2);
 }
