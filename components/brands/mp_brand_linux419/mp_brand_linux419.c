@@ -136,7 +136,13 @@ static mp_ftpd_behavior_t s_ftpd = {
     .creds = s_creds,
     .n_creds = sizeof(s_creds) / sizeof(s_creds[0]),
     .fs = mp_linux419_fs,
-    .max_clients = 32,
+    /* vsftpd's compiled-in defaults are 2000/50 (tunables.c), but a
+     * honeypot wants the CVE-2021-30047 421 reachable: these must sit
+     * below the global session budget (8) or the transport resets the
+     * connection before any 421 can be sent. Low limits are also what
+     * hardening guides recommend, so the config stays plausible. */
+    .max_clients = 6,
+    .max_per_ip = 4,
 };
 
 static const mp_brand_behavior_entry_t s_behaviors[] = {

@@ -47,7 +47,69 @@ static pasv_slot_t s_pasv[PASV_SLOTS];
 static mp_listener_cfg_t s_pasv_listeners[PASV_SLOTS];
 static mp_listener_cfg_t s_listener;
 static uint8_t s_active; /* control sessions (421 past max_clients) */
+/* per-source-IP session counts (421 past max_per_ip); the table can never
+ * outgrow the global session budget, so a fixed small array suffices */
+#define PERIP_SLOTS 8
+static struct { uint32_t ip; uint8_t n; } s_perip[PERIP_SLOTS];
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+
+/* found: slot index; new IP with room: -(slot)-1; table full: -100
+ * (only reachable if max_clients >= PERIP_SLOTS, which the brand
+ * values below the session budget prevent) */
+static int perip_find(uint32_t ip)
+{
+    int empty = -1;
+    for (int i = 0; i < PERIP_SLOTS; i++) {
+        if (s_perip[i].n && s_perip[i].ip == ip) {
+            return i;
+        }
+        if (!s_perip[i].n && empty < 0) {
+            empty = i;
+        }
+    }
+    return empty >= 0 ? -1 - empty : -100;
+}
+
+/* Returns: 0 admit, 1 refuse (global), 2 refuse (per-ip). Caller holds
+ * no lock; on 0 the counters are already claimed. */
+static int limit_admit(const mp_ftpd_behavior_t *b, uint32_t ip)
+{
+    int ret = 0;
+    portENTER_CRITICAL(&s_lock);
+    if (s_active >= b->max_clients) {
+        ret = 1; /* vsftpd checks max_clients first (prelogin.c) */
+    } else {
+        int i = perip_find(ip);
+        if (i >= 0 && s_perip[i].n >= b->max_per_ip) {
+            ret = 2;
+        } else {
+            if (i < 0 && i != -100) {
+                i = -i - 1;
+                s_perip[i].ip = ip;
+                s_perip[i].n = 0;
+            }
+            if (i >= 0) {
+                s_perip[i].n++;
+            }
+            s_active++;
+        }
+    }
+    portEXIT_CRITICAL(&s_lock);
+    return ret;
+}
+
+static void limit_release(uint32_t ip)
+{
+    portENTER_CRITICAL(&s_lock);
+    if (s_active) {
+        s_active--;
+    }
+    int i = perip_find(ip);
+    if (i >= 0 && s_perip[i].n) {
+        s_perip[i].n--;
+    }
+    portEXIT_CRITICAL(&s_lock);
+}
 
 static void pasv_data_task(mp_conn_t *conn, const mp_session_t *sess, void *arg)
 {
@@ -452,18 +514,19 @@ static void ftpd_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
         return;
     }
 
-    /* CVE-2021-30047: past max_clients vsftpd refuses with a 421 */
-    bool admit = false;
-    portENTER_CRITICAL(&s_lock);
-    if (s_active < b->max_clients) {
-        s_active++;
-        admit = true;
-    }
-    portEXIT_CRITICAL(&s_lock);
-    if (!admit) {
+    /* CVE-2021-30047: past the connection limits vsftpd answers 421
+     * (prelogin.c check_limits, verbatim strings) */
+    switch (limit_admit(b, sess->src_ip)) {
+    case 1:
         mp_send_str(conn, "421 There are too many connected users, "
                           "please try later.\r\n");
         return;
+    case 2:
+        mp_send_str(conn, "421 There are too many connections from your "
+                          "internet address.\r\n");
+        return;
+    default:
+        break;
     }
 
     ftp_t f = {
@@ -493,10 +556,7 @@ static void ftpd_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
         }
     }
     pasv_finish(&f);
-
-    portENTER_CRITICAL(&s_lock);
-    s_active--;
-    portEXIT_CRITICAL(&s_lock);
+    limit_release(sess->src_ip);
 }
 
 /* ------------------------------------------------------------- lifecycle */

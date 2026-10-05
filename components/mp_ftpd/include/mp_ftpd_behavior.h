@@ -21,7 +21,11 @@ typedef struct {
     const mpfs_node_t *fs;    /* served file tree (read-only persona) */
     size_t       fs_n;
     uint8_t      max_clients; /* 421 past this many control sessions
-                               * (CVE-2021-30047 connection-limit DoS) */
+                               * (CVE-2021-30047 connection-limit DoS).
+                               * Must stay below the global session budget
+                               * or the transport RSTs first and the 421
+                               * is never seen. */
+    uint8_t      max_per_ip;  /* per-address limit, vsftpd max_per_ip */
 } mp_ftpd_behavior_t;
 
 #ifdef __cplusplus
