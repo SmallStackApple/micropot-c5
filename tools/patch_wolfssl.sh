@@ -34,3 +34,10 @@ if ! grep -q 'define WOLFSSH_YES_RSA_SHA2_512' \
         managed_components/wolfssl__wolfssl/include/user_settings.h
     echo "patched: WOLFSSH_YES_RSA_SHA2_512 on"
 fi
+
+# ... and enabling it exposes an upstream typo in the canned key-algo
+# string: the trailing comma sits OUTSIDE the rsa-sha2-512 literal
+# (never compiled upstream), which breaks the build.
+sed -i 's|    "rsa-sha2-512",|    "rsa-sha2-512,"|' \
+    managed_components/wolfssl__wolfssh/src/internal.c
+echo "patched: rsa-sha2-512 string literal comma"
