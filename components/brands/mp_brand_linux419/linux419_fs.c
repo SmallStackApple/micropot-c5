@@ -206,10 +206,52 @@ const mpfs_node_t mp_linux419_fs[] = {
     D("/sys"),
     D("/tmp"),
     D("/usr"),
+    D("/usr/bin"),
+    D("/usr/lib"),
+    D("/usr/local"),
+    D("/usr/local/bin"),
+    D("/usr/sbin"),
     D("/var"),
     D("/var/log"),
     D("/var/www"),
     D("/var/www/html"),
+
+    /* merged-usr: /bin == /usr/bin and /sbin == /usr/sbin, so every
+     * executable appears under both paths. Empty content — cat on a
+     * binary prints garbage on a real box anyway, silence is close. */
+#define B(binname, binsz) \
+    F("/bin/" binname, NULL, "-rwxr-xr-x", "root", "root", binsz, "Oct  1 09:00"), \
+    F("/usr/bin/" binname, NULL, "-rwxr-xr-x", "root", "root", binsz, "Oct  1 09:00")
+#define S(binname, binsz) \
+    F("/sbin/" binname, NULL, "-rwxr-xr-x", "root", "root", binsz, "Oct  1 09:00"), \
+    F("/usr/sbin/" binname, NULL, "-rwxr-xr-x", "root", "root", binsz, "Oct  1 09:00")
+
+    B("bash", 1168776), B("sh", 129816), B("dash", 129816),
+    B("ls", 138208), B("dir", 138208), B("cat", 43416), B("grep", 186904),
+    B("echo", 35112), B("pwd", 35128), B("uname", 35152),
+    B("id", 44432), B("whoami", 35160), B("hostname", 35112),
+    B("date", 100616), B("uptime", 35128), B("w", 30920),
+    B("which", 39496), B("env", 35128), B("clear", 14664),
+    B("head", 39272), B("tail", 39288), B("less", 178688),
+    B("more", 35112), B("vi", 950272), B("nano", 280080),
+    B("awk", 658664), B("sed", 80232), B("dmesg", 47456),
+    B("top", 117776), B("ps", 125832), B("kill", 35144),
+    B("df", 47464), B("free", 43344), B("ss", 114728),
+    B("netstat", 141312), B("ifconfig", 80576), B("ip", 548864),
+    B("route", 68208), B("ping", 64424), B("wget", 499088),
+    B("curl", 240960), B("sudo", 170672), B("passwd", 55624),
+    B("su", 55624), B("login", 43352), B("mkdir", 55624),
+    B("rmdir", 35120), B("touch", 105856), B("rm", 64312),
+    B("chmod", 55624), B("chown", 59720), B("cp", 105784),
+    B("mv", 105728), B("ln", 59704), B("sync", 35120),
+
+    S("init", 1714034), S("sshd", 851848), S("vsftpd", 134728),
+    S("apache2", 667640), S("inetd", 47488), S("fdisk", 187824),
+    S("fsck", 275008), S("iptables", 66632), S("ip6tables", 66632),
+    S("reboot", 35144), S("shutdown", 35160),
+#undef B
+#undef S
+
 
     F("/etc/passwd", s_passwd, "-rw-r--r--", "root", "root", 0, "Oct  1 09:00"),
     F("/etc/group", s_group, "-rw-r--r--", "root", "root", 0, "Oct  1 09:00"),
@@ -281,12 +323,6 @@ static const mp_cmd_t s_extra_cmds[] = {
       "              total        used        free      shared  buff/cache   available\n"
       "Mem:           1966         522        1443           9         352        1585\n"
       "Swap:          1023           0        1023\n" },
-    { "uptime",
-      " 09:42:11 up 2 days, 22:41,  1 user,  load average: 0.00, 0.01, 0.05\n" },
-    { "w",
-      " 09:42:11 up 2 days, 22:41,  1 user,  load average: 0.00, 0.01, 0.05\n"
-      "USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT\n"
-      "root     pts/0    192.168.1.66     09:41    0.00s  0.02s  0.00s -bash\n" },
     { "ss -tlnp",
       "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process\n"
       "LISTEN 0      128          0.0.0.0:21         0.0.0.0:*     users:((\"vsftpd\",pid=530,fd=3))\n"

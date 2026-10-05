@@ -28,6 +28,7 @@ typedef struct {
     const char *user;
     const char *proto; /* event namespace: "telnet" or "ssh" */
     bool root;
+    int64_t login_us;  /* shell entry, for w's LOGIN@ column */
 } sh_t;
 
 /* log a command line as <proto>.command */
@@ -257,8 +258,8 @@ static int cmd_ls(sh_t *sh, int argc, char **argv)
         return 0;
     }
 
-    const mpfs_node_t *kids[32];
-    size_t n = mpfs_children(sh->cfg->fs, sh->cfg->fs_n, path, kids, 32);
+    const mpfs_node_t *kids[64];
+    size_t n = mpfs_children(sh->cfg->fs, sh->cfg->fs_n, path, kids, 64);
     if (long_fmt) {
         if (show_all) {
             out(sh, "total 8\r\n");
@@ -483,6 +484,8 @@ typedef struct {
     sh_cmd_fn  fn;
 } sh_builtin_t;
 
+static const sh_builtin_t s_builtins[]; /* defined below, used by which */
+
 static int wrap_pwd(sh_t *s, int a, char **v)      { (void)a; (void)v; return cmd_pwd(s); }
 static int wrap_ifconfig(sh_t *s, int a, char **v) { return cmd_ifconfig(s, a, v); }
 static int wrap_ip(sh_t *s, int a, char **v)       { return cmd_ip(s, a, v); }
@@ -513,6 +516,101 @@ static int wrap_date(sh_t *s, int a, char **v)
     return outf(s, "%s\r\n", buf);
 }
 
+/* procps uptime text: "up 2 days, 22:41" / "up  3:17" / "up 3 min" */
+static void fmt_uptime(char *buf, size_t cap, uint32_t up_s)
+{
+    uint32_t d = up_s / 86400, h = (up_s % 86400) / 3600, m = (up_s % 3600) / 60;
+    if (d) {
+        snprintf(buf, cap, "up %u day%s, %2u:%02u",
+                 (unsigned)d, d > 1 ? "s" : "", (unsigned)h, (unsigned)m);
+    } else if (h) {
+        snprintf(buf, cap, "up %2u:%02u", (unsigned)h, (unsigned)m);
+    } else {
+        snprintf(buf, cap, "up %u min", (unsigned)(m ? m : 1));
+    }
+}
+
+/* the header line shared by uptime(1) and w(1) */
+static int out_uptime_line(sh_t *s)
+{
+    time_t now = (time_t)(SH_CLOCK_BASE_EPOCH + esp_timer_get_time() / 1000000);
+    struct tm tm;
+    gmtime_r(&now, &tm);
+    char up[40];
+    fmt_uptime(up, sizeof(up), (uint32_t)(esp_timer_get_time() / 1000000));
+    return outf(s, " %02d:%02d:%02d %s,  1 user,  load average: 0.00, 0.01, 0.05\r\n",
+                tm.tm_hour, tm.tm_min, tm.tm_sec, up);
+}
+
+static int wrap_uptime(sh_t *s, int a, char **v)
+{
+    (void)a; (void)v;
+    return out_uptime_line(s);
+}
+
+static int wrap_w(sh_t *s, int a, char **v)
+{
+    (void)a; (void)v;
+    if (out_uptime_line(s) < 0) {
+        return -1;
+    }
+    if (out(s, "USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT\r\n") < 0) {
+        return -1;
+    }
+    /* FROM is the peer we are actually talking to — a canned address is
+     * the first thing an attacker checks */
+    unsigned o0 = (unsigned)(s->sess->src_ip & 0xff);
+    unsigned o1 = (unsigned)((s->sess->src_ip >> 8) & 0xff);
+    unsigned o2 = (unsigned)((s->sess->src_ip >> 16) & 0xff);
+    unsigned o3 = (unsigned)((s->sess->src_ip >> 24) & 0xff);
+    char from[17];
+    snprintf(from, sizeof(from), "%u.%u.%u.%u", o0, o1, o2, o3);
+
+    time_t lt = (time_t)(SH_CLOCK_BASE_EPOCH + s->login_us / 1000000);
+    struct tm ltm;
+    gmtime_r(&lt, &ltm);
+    const char *tty = strcmp(s->proto, "ssh") == 0 ? "pts/0" : "pts/1";
+    return outf(s, "%-8s %-8s %-16s %02d:%02d    0.00s  0.02s  0.00s w\r\n",
+                s->user, tty, from, ltm.tm_hour, ltm.tm_min);
+}
+
+static int wrap_which(sh_t *s, int a, char **v)
+{
+    if (a < 2) {
+        return 0;
+    }
+    static const char *const sbin[] = {
+        "init", "sshd", "vsftpd", "apache2", "inetd", "fdisk", "fsck",
+        "iptables", "ip6tables", "reboot", "shutdown",
+    };
+    for (int i = 1; i < a; i++) {
+        bool found = false, in_sbin = false;
+        for (size_t j = 0; j < sizeof(sbin) / sizeof(sbin[0]); j++) {
+            if (strcmp(v[i], sbin[j]) == 0) {
+                found = in_sbin = true;
+                break;
+            }
+        }
+        if (!found) {
+            for (size_t j = 0; s_builtins[j].name; j++) {
+                if (strcmp(v[i], s_builtins[j].name) == 0) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found && mp_cmd_lookup(s->cfg->extra_cmds, s->cfg->n_extra, v[i])) {
+            found = true;
+        }
+        if (found) {
+            if (outf(s, "/usr/%s/%s\r\n", in_sbin ? "sbin" : "bin", v[i]) < 0) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 static const sh_builtin_t s_builtins[] = {
     { "pwd", wrap_pwd },
     { "cd", wrap_cd },
@@ -531,6 +629,9 @@ static const sh_builtin_t s_builtins[] = {
     { "wget", wrap_wget },
     { "curl", wrap_curl },
     { "date", wrap_date },
+    { "uptime", wrap_uptime },
+    { "w", wrap_w },
+    { "which", wrap_which },
     { "mkdir", cmd_noop },
     { "touch", cmd_noop },
     { "rm", cmd_noop },
@@ -543,6 +644,7 @@ static const sh_builtin_t s_builtins[] = {
     { "kill", cmd_noop },
     { "clear", cmd_noop },
     { "sync", cmd_noop },
+    { NULL, NULL }, /* which() iterates to the sentinel */
 };
 
 static bool is_exit_cmd(const char *cmd)
@@ -557,6 +659,8 @@ static bool is_reboot_cmd(const char *cmd)
            strcmp(cmd, "poweroff") == 0 || strcmp(cmd, "halt") == 0;
 }
 
+static const char *shell_loop(sh_t *sh);
+
 const char *mp_linuxsh_shell(mp_conn_t *conn, const mp_session_t *sess,
                              const void *ctx, const char *user,
                              const char *proto)
@@ -569,6 +673,7 @@ const char *mp_linuxsh_shell(mp_conn_t *conn, const mp_session_t *sess,
         .user = user && *user ? user : "root",
         .proto = proto && *proto ? proto : "telnet",
         .root = !user || strcmp(user, "root") == 0,
+        .login_us = esp_timer_get_time(),
     };
     if (!sh.root && strcmp(sh.cwd, "/root") == 0) {
         snprintf(sh.cwd, sizeof(sh.cwd), "/home/%s", sh.user);
@@ -599,18 +704,145 @@ const char *mp_linuxsh_shell(mp_conn_t *conn, const mp_session_t *sess,
              o0, o1, o2, o3);
     }
 
+    return shell_loop(&sh);
+}
+
+/* run_simple outcomes: >=0 is a shell exit status, negative ends the
+ * session (SH_R_*). "command not found" is status 127 like bash. */
+#define SH_R_LOGOUT (-2)
+#define SH_R_REBOOT (-3)
+#define SH_R_SEND   (-4)
+
+/* Execute one simple command (no separators). MUTATES cmd (split). */
+static int run_simple(sh_t *sh, char *cmd)
+{
+    char *argv[16];
+    int argc = split(cmd, argv, 16);
+    if (!argc) {
+        return 0;
+    }
+    if (is_exit_cmd(argv[0])) {
+        return SH_R_LOGOUT;
+    }
+    if (is_reboot_cmd(argv[0])) {
+        out(sh, "The system is going down NOW!\r\n");
+        return SH_R_REBOOT;
+    }
+    if (strcmp(argv[0], "sudo") == 0) {
+        /* already root: sudo just runs the rest of the line */
+        if (argc < 2) {
+            out(sh, "usage: sudo command\r\n");
+            return 0;
+        }
+        memmove(argv, argv + 1, sizeof(char *) * (size_t)(argc - 1));
+        argc--;
+    }
+
+    for (size_t i = 0; i < sizeof(s_builtins) / sizeof(s_builtins[0]); i++) {
+        if (strcmp(argv[0], s_builtins[i].name) == 0) {
+            return s_builtins[i].fn(sh, argc, argv) < 0 ? SH_R_SEND : 0;
+        }
+    }
+
+    /* brand canned data (ps, df, free, ss, top, ...) */
+    char line[256] = { 0 };
+    for (int i = 0; i < argc; i++) {
+        strlcat(line, argv[i], sizeof(line));
+        if (i + 1 < argc) {
+            strlcat(line, " ", sizeof(line));
+        }
+    }
+    const mp_cmd_t *c = mp_cmd_lookup(sh->cfg->extra_cmds,
+                                      sh->cfg->n_extra, line);
+    if (c) {
+        /* canned bodies use \n; terminal wants \r\n */
+        for (const char *p = c->response; *p;) {
+            const char *nl = strchr(p, '\n');
+            if (nl) {
+                mp_conn_send(sh->conn, p, (size_t)(nl - p));
+                out(sh, "\r\n");
+                p = nl + 1;
+            } else {
+                out(sh, p);
+                out(sh, "\r\n");
+                break;
+            }
+        }
+        return 0;
+    }
+    outf(sh, "bash: %s: command not found\r\n", argv[0]);
+    return 127;
+}
+
+/* Execute a line of commands joined by ';', '&&', '||' (quotes honored).
+ * bash runs them left to right; && skips on failure, || on success. */
+static int run_line(sh_t *sh, char *line)
+{
+    int status = 0;
+    int cond = 0; /* 0: always (';' / first), 1: &&, 2: || */
+    char *p = line;
+
+    while (*p) {
+        char *sep = p;
+        char quote = 0;
+        while (*sep) {
+            if (quote) {
+                if (*sep == quote) {
+                    quote = 0;
+                }
+            } else if (*sep == '"' || *sep == '\'') {
+                quote = *sep;
+            } else if (*sep == ';') {
+                break;
+            } else if (*sep == '&' && sep[1] == '&') {
+                break;
+            } else if (*sep == '|' && sep[1] == '|') {
+                break;
+            }
+            sep++;
+        }
+        int next = 0;
+        if (*sep == ';') {
+            *sep = '\0';
+            sep++;
+        } else if (*sep == '&' && sep[1] == '&') {
+            next = 1;
+            *sep = '\0';
+            sep += 2;
+        } else if (*sep == '|' && sep[1] == '|') {
+            next = 2;
+            *sep = '\0';
+            sep += 2;
+        }
+
+        bool run = cond == 0 || (cond == 1 && status == 0) ||
+                   (cond == 2 && status != 0);
+        if (run && *p) {
+            int r = run_simple(sh, p);
+            if (r < 0) {
+                return r;
+            }
+            status = r;
+        }
+        cond = next;
+        p = sep;
+    }
+    return 0;
+}
+
+static const char *shell_loop(sh_t *sh)
+{
     const char *reason = "closed";
     char cmd[256];
-    char *argv[16];
 
     for (;;) {
         /* bash PS1: user@host:cwd# (or $ for non-root) */
-        if (outf(&sh, "%s@%s:%s%s ", sh.user, sh.cfg->hostname, sh.cwd,
-                 sh.root ? "#" : "$") < 0) {
+        if (outf(sh, "%s@%s:%s%s ", sh->user, sh->cfg->hostname, sh->cwd,
+                 sh->root ? "#" : "$") < 0) {
             reason = "send_error";
             break;
         }
-        int n = mp_line_read(conn, cmd, sizeof(cmd), SHELL_TIMEOUT_MS,
+        int n = mp_line_read(sh->conn, cmd, sizeof(cmd), SHELL_TIMEOUT_MS,
                              true, MP_LINE_ECHO_ON);
         if (n < 0) {
             reason = (n == -2) ? "timeout" : "closed";
@@ -620,73 +852,22 @@ const char *mp_linuxsh_shell(mp_conn_t *conn, const mp_session_t *sess,
             continue;
         }
 
-        log_command(&sh, cmd);
+        log_command(sh, cmd);
 
-        int argc = split(cmd, argv, 16);
-        if (!argc) {
-            continue;
-        }
-        if (is_exit_cmd(argv[0])) {
+        switch (run_line(sh, cmd)) {
+        case SH_R_LOGOUT:
             reason = "logout";
-            break;
-        }
-        if (is_reboot_cmd(argv[0])) {
-            out(&sh, "The system is going down NOW!\r\n");
+            goto out;
+        case SH_R_REBOOT:
             reason = "reboot";
+            goto out;
+        case SH_R_SEND:
+            reason = "send_error";
+            goto out;
+        default:
             break;
-        }
-        if (strcmp(argv[0], "sudo") == 0) {
-            /* already root: sudo just runs the rest of the line */
-            if (argc < 2) {
-                out(&sh, "usage: sudo command\r\n");
-                continue;
-            }
-            memmove(argv, argv + 1, sizeof(char *) * (size_t)(argc - 1));
-            argc--;
-        }
-
-        bool handled = false;
-        for (size_t i = 0; i < sizeof(s_builtins) / sizeof(s_builtins[0]); i++) {
-            if (strcmp(argv[0], s_builtins[i].name) == 0) {
-                if (s_builtins[i].fn(&sh, argc, argv) < 0) {
-                    reason = "send_error";
-                }
-                handled = true;
-                break;
-            }
-        }
-        if (reason[0] == 's') { /* send_error */
-            break;
-        }
-        if (!handled) {
-            /* brand canned data (ps, df, free, ss, uptime, ...) */
-            char line[256] = { 0 };
-            for (int i = 0; i < argc; i++) {
-                strlcat(line, argv[i], sizeof(line));
-                if (i + 1 < argc) {
-                    strlcat(line, " ", sizeof(line));
-                }
-            }
-            const mp_cmd_t *c = mp_cmd_lookup(sh.cfg->extra_cmds,
-                                              sh.cfg->n_extra, line);
-            if (c) {
-                /* canned bodies use \n; terminal wants \r\n */
-                for (const char *p = c->response; *p;) {
-                    const char *nl = strchr(p, '\n');
-                    if (nl) {
-                        mp_conn_send(conn, p, (size_t)(nl - p));
-                        out(&sh, "\r\n");
-                        p = nl + 1;
-                    } else {
-                        out(&sh, p);
-                        out(&sh, "\r\n");
-                        break;
-                    }
-                }
-            } else {
-                outf(&sh, "bash: %s: command not found\r\n", argv[0]);
-            }
         }
     }
+out:
     return reason;
 }
