@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "esp_spiffs.h"
@@ -222,6 +223,10 @@ static void ring_mount(void)
         rename(MP_LOG_RING_A, MP_LOG_RING_B);
     }
     s_ring_mounted = true;
+    struct stat sa, sb;
+    long na = stat(MP_LOG_RING_A, &sa) == 0 ? (long)sa.st_size : -1;
+    long nb = stat(MP_LOG_RING_B, &sb) == 0 ? (long)sb.st_size : -1;
+    ESP_LOGI(TAG, "log ring mounted (A=%ld B=%ld bytes)", na, nb);
 }
 
 static void ring_write(const char *line)
@@ -258,7 +263,18 @@ static void ring_drain(void)
     }
     if (!s_ring_r) {
         if (access(MP_LOG_RING_B, F_OK) != 0) {
-            return;
+            /* B absent: promote the current write slot so spills from THIS
+             * boot are drainable too — otherwise anything under the 128 KiB
+             * overflow threshold stays stuck in A until a reboot. */
+            if (access(MP_LOG_RING_A, F_OK) != 0) {
+                if (s_ring_w) {
+                    fclose(s_ring_w);
+                    s_ring_w = NULL;
+                }
+                rename(MP_LOG_RING_A, MP_LOG_RING_B);
+            } else {
+                return;
+            }
         }
         s_ring_r = fopen(MP_LOG_RING_B, "r");
         if (!s_ring_r) {
