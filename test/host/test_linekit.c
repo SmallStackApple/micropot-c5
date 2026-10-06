@@ -195,6 +195,38 @@ static void test_read_crlf_no_phantom_line(void)
     close(fds[0]); close(fds[1]);
 }
 
+static void test_read_swallows_escape_sequences(void)
+{
+    /* arrow keys emit CSI (ESC [ A); they must not enter the buffer —
+     * a bare ESC[A once reached the shell as a "command" and crashed
+     * the builtin dispatch on its NULL sentinel */
+    int fds[2];
+    CHECK(make_pair(fds) == 0);
+    write(fds[1], "id\x1b[A\r", 6);
+
+    char buf[32];
+    int n = mp_line_read(CONN, buf, sizeof(buf), 1000, false, MP_LINE_ECHO_OFF);
+    CHECK(n == 2);
+    CHECK_STR(buf, "id");
+    close(fds[0]); close(fds[1]);
+
+    /* pure Up-arrow at an empty prompt: an empty line, not a command */
+    CHECK(make_pair(fds) == 0);
+    write(fds[1], "\x1b[A\x1b[B\r", 8);
+    n = mp_line_read(CONN, buf, sizeof(buf), 1000, false, MP_LINE_ECHO_OFF);
+    CHECK(n == 0);
+    close(fds[0]); close(fds[1]);
+
+    /* SS3 form (ESC O A, some terminals) and a long CSI (Delete:
+     * ESC [ 3 ~) get swallowed whole too */
+    CHECK(make_pair(fds) == 0);
+    write(fds[1], "\x1bOA\x1b[3~ls\r", 11);
+    n = mp_line_read(CONN, buf, sizeof(buf), 1000, false, MP_LINE_ECHO_OFF);
+    CHECK(n == 2);
+    CHECK_STR(buf, "ls");
+    close(fds[0]); close(fds[1]);
+}
+
 int main(void)
 {
     test_cmd_lookup();
@@ -204,6 +236,7 @@ int main(void)
     test_read_timeout_and_close();
     test_read_cr_only_enter();
     test_read_crlf_no_phantom_line();
+    test_read_swallows_escape_sequences();
     test_send_all();
     TEST_SUMMARY("test_linekit");
 }

@@ -38,6 +38,30 @@ static int read_char(mp_conn_t *conn, unsigned char *c, int timeout_ms)
     return (r == MP_CONN_TIMEOUT) ? -2 : -1;
 }
 
+/* Swallow one ANSI escape sequence without consuming normal input:
+ * CSI (ESC [ params final-byte), SS3 (ESC O x), or two-byte ESC x.
+ * Follow-up bytes get a short timeout so a lone ESC keypress does
+ * not stall the line for the full line timeout. */
+static void swallow_escape(mp_conn_t *conn)
+{
+    unsigned char b;
+    if (read_char(conn, &b, 100) != 1) {
+        return;
+    }
+    if (b == '[') {
+        /* CSI: parameter (0x30-0x3f) / intermediate (0x20-0x2f) bytes,
+         * terminated by a final byte in 0x40-0x7e. */
+        while (read_char(conn, &b, 100) == 1) {
+            if (b >= 0x40 && b <= 0x7e) {
+                break;
+            }
+        }
+    } else if (b == 'O') {
+        read_char(conn, &b, 100); /* SS3: exactly one more byte */
+    }
+    /* plain ESC x: the trailing byte is already eaten */
+}
+
 int mp_line_read(mp_conn_t *conn, char *buf, size_t cap, int timeout_ms,
                  bool strip_iac, mp_line_echo_t echo)
 {
@@ -69,6 +93,13 @@ int mp_line_read(mp_conn_t *conn, char *buf, size_t cap, int timeout_ms,
         }
         if (c == 0) {
             continue; /* telnet CR NUL */
+        }
+        if (c == 0x1b) {
+            /* ANSI escape (arrow keys, Home/End, ...): swallow the whole
+             * sequence — no echo, no buffering. A lone ESC[A turning
+             * into a "command" once crashed the shell dispatch. */
+            swallow_escape(conn);
+            continue;
         }
         if (c == '\r') {
             /* Enter. An ssh pty sends CR alone (on a real tty the line

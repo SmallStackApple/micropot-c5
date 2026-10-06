@@ -738,7 +738,7 @@ static int run_simple(sh_t *sh, char *cmd)
         argc--;
     }
 
-    for (size_t i = 0; i < sizeof(s_builtins) / sizeof(s_builtins[0]); i++) {
+    for (size_t i = 0; s_builtins[i].name; i++) { /* table is NULL-terminated */
         if (strcmp(argv[0], s_builtins[i].name) == 0) {
             return s_builtins[i].fn(sh, argc, argv) < 0 ? SH_R_SEND : 0;
         }
