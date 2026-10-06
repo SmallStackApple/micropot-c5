@@ -39,7 +39,6 @@ static const char *TAG = "mp_httpd";
 /* 2026-01-01 00:00:00 UTC; Last-Modified of the "installed" files. */
 #define CLOCK_BASE_EPOCH 1767225600L
 
-static mp_listener_cfg_t s_listener;
 
 static time_t httpd_now(void)
 {
@@ -438,14 +437,16 @@ static esp_err_t httpd_start(mp_service_t *svc)
                  svc->brand ? svc->brand->meta->id : "(null)");
         return ESP_ERR_NOT_SUPPORTED;
     }
-    memset(&s_listener, 0, sizeof(s_listener));
-    s_listener.vaddr = svc->bind.vaddr;
-    s_listener.port = svc->bind.port;
-    s_listener.name = "httpd";
-    s_listener.persona = svc->persona ? svc->persona->id : NULL;
-    s_listener.handler = httpd_conn;
-    s_listener.arg = svc;
-    return mp_xport_listen(&s_listener);
+    mp_listener_cfg_t cfg = {
+        .vaddr = svc->bind.vaddr,
+        .port = svc->bind.port,
+        .name = "httpd",
+        .persona = svc->persona ? svc->persona->id : NULL,
+        .handler = httpd_conn,
+        .arg = svc,
+        .xport = mp_service_xport(svc),
+    };
+    return mp_xport_listen(&cfg);
 }
 
 static const mp_service_ops_t s_ops = {

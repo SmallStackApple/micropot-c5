@@ -49,6 +49,9 @@ const mp_persona_t *mp_persona_by_vaddr(uint32_t vaddr);
 const mp_persona_t *mp_persona_by_index(size_t index);
 size_t              mp_persona_count(void);
 
+/** Persona definition by id, or NULL. */
+const mp_persona_t *mp_persona_find(const char *id);
+
 bool                mp_persona_has_service(const mp_persona_t *p, const char *name);
 
 #ifdef __cplusplus

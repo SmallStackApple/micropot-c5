@@ -24,6 +24,8 @@
 
 #include "mp_log.h"
 #include "mp_net.h"
+#include "mp_vdev.h"
+#include "mp_vif.h"
 
 #include "s419_pkt.h"
 #include "s419_priv.h"
@@ -257,33 +259,44 @@ s419_tcb *s419_tcbs(void)
 
 /* ------------------------------------------------------------- listeners */
 
-const s419_listener_t *s419_listener_find(uint16_t port)
+/* Exact vaddr match wins over the wildcard (vaddr 0 = primary), so two
+ * personas can share a port on different virtual devices. */
+const s419_listener_t *s419_listener_find(uint32_t vaddr, uint16_t port)
 {
+    const s419_listener_t *wild = NULL;
     for (size_t i = 0; i < s_n_listeners; i++) {
-        if (s_listeners[i].port == port) {
+        if (s_listeners[i].port != port) {
+            continue;
+        }
+        if (s_listeners[i].vaddr == vaddr) {
             return &s_listeners[i];
         }
+        if (s_listeners[i].vaddr == 0) {
+            wild = &s_listeners[i];
+        }
     }
-    return NULL;
+    return wild;
 }
 
-esp_err_t s419_listener_add(uint16_t port, const char *name,
+esp_err_t s419_listener_add(uint32_t vaddr, uint16_t port, const char *name,
                             const char *persona,
                             mp_conn_handler_t handler, void *arg)
 {
     if (s_n_listeners >= S419_MAX_LISTENERS) {
         return ESP_ERR_NO_MEM;
     }
-    if (s419_listener_find(port)) {
+    if (s419_listener_find(vaddr, port)) {
         return ESP_ERR_INVALID_STATE;
     }
     s419_listener_t *l = &s_listeners[s_n_listeners++];
+    l->vaddr = vaddr;
     l->port = port;
     l->name = name;
     l->persona = persona;
     l->handler = handler;
     l->arg = arg;
-    ESP_LOGI(TAG, "%s listening on port %u (stack419)", name, port);
+    ESP_LOGI(TAG, "%s listening on vaddr 0x%08lx port %u (stack419)", name,
+             (unsigned long)vaddr, port);
     return ESP_OK;
 }
 
@@ -292,7 +305,12 @@ esp_err_t s419_listener_add(uint16_t port, const char *name,
 static bool for_us(uint32_t dst_nbo)
 {
     uint32_t ip = s419_our_ip();
-    return ip != 0 && dst_nbo == ip;
+    if (ip != 0 && dst_nbo == ip) {
+        return true;
+    }
+    /* alias vdevs: reached through the mp_vif ip4 hook for inbound, but
+     * keep the check here so the raw-PCB path stays consistent */
+    return mp_vdev_by_vaddr(PP_HTONL(dst_nbo)) != NULL;
 }
 
 /* TCP receive classification, following 4.19:
@@ -339,7 +357,7 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
         return eat(p);
     }
 
-    const s419_listener_t *lst = s419_listener_find(lport);
+    const s419_listener_t *lst = s419_listener_find(PP_HTONL(ip_dst), lport);
     if (lst) {
         if (flags & S419_ACK) {
             s419_tcp_closed_reset(ip_dst, ip_src, lport, rport, th, tcp_len);
@@ -435,6 +453,41 @@ static void s419_tick(void *arg)
     sys_timeout(10, s419_tick, NULL);
 }
 
+/* Alias-destined packets arrive here through mp_vif's LWIP_HOOK_IP4_INPUT
+ * glue: lwIP would drop them as not-for-us before its raw PCBs ever run.
+ * Same ownership contract as the raw callbacks — returning true means the
+ * pbuf was consumed (freed) here. */
+bool s419_feed_ip4(struct pbuf *p)
+{
+    const uint8_t *ip = (const uint8_t *)p->payload;
+    if (p->tot_len < S419_IP_HLEN || (ip[0] >> 4) != 4) {
+        return false;
+    }
+    uint32_t ip_dst = s419_rd32(ip + 16);
+    if (!mp_vdev_by_vaddr(PP_HTONL(ip_dst))) {
+        return false; /* not an alias: lwIP's normal path handles it */
+    }
+    s_last_rx_ms = s419_now_ms();
+    uint8_t eaten = 0;
+    switch (ip[9]) {
+    case IP_PROTO_TCP:
+        eaten = on_tcp(NULL, NULL, p, NULL);
+        break;
+    case IP_PROTO_UDP:
+        eaten = on_udp(NULL, NULL, p, NULL);
+        break;
+    case IP_PROTO_ICMP:
+        eaten = on_icmp(NULL, NULL, p, NULL);
+        break;
+    default:
+        break; /* unemulated protocol on an alias: fall through to drop */
+    }
+    if (!eaten) {
+        pbuf_free(p);
+    }
+    return true;
+}
+
 /* ------------------------------------------------------------------ init */
 
 static void core_up(void *ctx)
@@ -452,6 +505,8 @@ static void core_up(void *ctx)
     raw_recv(s_pcb_tcp, on_tcp, NULL);
     raw_recv(s_pcb_udp, on_udp, NULL);
     raw_recv(s_pcb_icmp, on_icmp, NULL);
+    /* alias-destined traffic arrives via the mp_vif ip4-input hook */
+    mp_vif_set_ip4_feed(s419_feed_ip4);
     s_icmp_id = (uint16_t)esp_random(); /* natural, non-zero counter start */
     sys_timeout(10, s419_tick, NULL);
     ESP_LOGI(TAG, "stack419 engine up (ttl=%u mss=%u wnd=%u wscale=%u ts=%d)",

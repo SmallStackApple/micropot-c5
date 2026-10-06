@@ -88,6 +88,58 @@ menu "MicroPot-C5 honeypot"
         endchoice
     endmenu
 
+    menu "Virtual devices (IP aliases)"
+
+        config MICROPOT_VDEV1_IP
+            string "vdev1 alias IPv4 (0.0.0.0 = disabled)"
+            default "0.0.0.0"
+        config MICROPOT_VDEV1_PERSONA
+            string "vdev1 persona id (needs a wire profile)"
+            default ""
+
+        config MICROPOT_VDEV2_IP
+            string "vdev2 alias IPv4"
+            default "0.0.0.0"
+        config MICROPOT_VDEV2_PERSONA
+            string "vdev2 persona id"
+            default ""
+
+        config MICROPOT_VDEV3_IP
+            string "vdev3 alias IPv4"
+            default "0.0.0.0"
+        config MICROPOT_VDEV3_PERSONA
+            string "vdev3 persona id"
+            default ""
+
+        config MICROPOT_VDEV4_IP
+            string "vdev4 alias IPv4"
+            default "0.0.0.0"
+        config MICROPOT_VDEV4_PERSONA
+            string "vdev4 persona id"
+            default ""
+
+        config MICROPOT_VDEV5_IP
+            string "vdev5 alias IPv4"
+            default "0.0.0.0"
+        config MICROPOT_VDEV5_PERSONA
+            string "vdev5 persona id"
+            default ""
+
+        config MICROPOT_VDEV6_IP
+            string "vdev6 alias IPv4"
+            default "0.0.0.0"
+        config MICROPOT_VDEV6_PERSONA
+            string "vdev6 persona id"
+            default ""
+
+        config MICROPOT_VDEV7_IP
+            string "vdev7 alias IPv4"
+            default "0.0.0.0"
+        config MICROPOT_VDEV7_PERSONA
+            string "vdev7 persona id"
+            default ""
+    endmenu
+
     menu "Structured logging"
         choice MICROPOT_LOG_PROTO
             prompt "Log transport"

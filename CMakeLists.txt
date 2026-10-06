@@ -17,6 +17,15 @@ if(TARGET __idf_wolfssl__wolfssl)
     target_compile_options(__idf_wolfssl__wolfssl PRIVATE -Wno-error=cpp)
     target_compile_definitions(__idf_wolfssl__wolfssl PRIVATE WOLFSSL_WOLFSSH)
 endif()
+
+# Alias vdev demux: our LWIP_HOOK_IP4_INPUT lives in mp_core's
+# mp_lwip_hooks.h, injected into the lwip build via the IDF extension point.
+if(TARGET __idf_lwip)
+    target_compile_options(__idf_lwip PRIVATE
+        "-DESP_IDF_LWIP_HOOK_FILENAME=\"mp_lwip_hooks.h\"")
+    target_include_directories(__idf_lwip PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/components/mp_core/include")
+endif()
 if(TARGET __idf_wolfssl__wolfssh)
     target_compile_options(__idf_wolfssl__wolfssh PRIVATE -Wno-error=cpp)
     target_compile_definitions(__idf_wolfssl__wolfssh PRIVATE WOLFSSL_WOLFSSH)

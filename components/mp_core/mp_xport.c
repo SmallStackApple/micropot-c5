@@ -32,7 +32,8 @@ esp_err_t mp_xport_listen(const mp_listener_cfg_t *cfg)
     if (!cfg || !cfg->handler) {
         return ESP_ERR_INVALID_ARG;
     }
-    return s_backend->listen(cfg);
+    const mp_xport_backend_t *b = cfg->xport ? cfg->xport : s_backend;
+    return b->listen(cfg);
 }
 
 bool mp_xport_budget_take(void)

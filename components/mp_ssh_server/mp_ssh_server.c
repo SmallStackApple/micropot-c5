@@ -70,7 +70,6 @@ static const char s_mac_list[] =
 static const char s_key_list[] =
     "ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256,ssh-rsa";
 
-static mp_listener_cfg_t s_listener;
 static WOLFSSH_CTX *s_ctx;
 
 /* OpenSSH MaxStartups-style early drop, but for a real reason here:
@@ -395,14 +394,16 @@ static esp_err_t sshd_start(mp_service_t *svc)
         }
     }
 
-    memset(&s_listener, 0, sizeof(s_listener));
-    s_listener.vaddr = svc->bind.vaddr;
-    s_listener.port = svc->bind.port;
-    s_listener.name = "sshd";
-    s_listener.persona = svc->persona ? svc->persona->id : NULL;
-    s_listener.handler = sshd_conn;
-    s_listener.arg = svc;
-    return mp_xport_listen(&s_listener);
+    mp_listener_cfg_t cfg = {
+        .vaddr = svc->bind.vaddr,
+        .port = svc->bind.port,
+        .name = "sshd",
+        .persona = svc->persona ? svc->persona->id : NULL,
+        .handler = sshd_conn,
+        .arg = svc,
+        .xport = mp_service_xport(svc),
+    };
+    return mp_xport_listen(&cfg);
 }
 
 static const mp_service_ops_t s_ops = {

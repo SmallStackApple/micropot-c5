@@ -184,6 +184,11 @@ static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t err)
 
 static esp_err_t http_start(mp_service_t *svc)
 {
+    /* esp_http_server is a plain lwIP-socket server: it can only serve the
+     * primary address. Alias vdevs need the packet-engine httpd (mp_apache). */
+    if (svc->bind.vaddr != 0) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     const mp_http_behavior_t *behavior =
         svc->brand ? mp_brand_behavior(svc->brand, "http") : NULL;
     if (!behavior) {

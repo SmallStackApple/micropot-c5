@@ -27,7 +27,6 @@ static const char *TAG = "mp_ssh";
 #define SSH_DEFAULT_LINGER_MS 5000
 #define SSH_CLIENT_BANNER_MAX 255 /* RFC 4253 §4.2 */
 
-static mp_listener_cfg_t s_listener;
 
 static void ssh_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
 {
@@ -84,14 +83,16 @@ static esp_err_t ssh_start(mp_service_t *svc)
                  svc->brand ? svc->brand->meta->id : "(null)");
         return ESP_ERR_NOT_SUPPORTED;
     }
-    memset(&s_listener, 0, sizeof(s_listener));
-    s_listener.vaddr = svc->bind.vaddr;
-    s_listener.port = svc->bind.port;
-    s_listener.name = "ssh";
-    s_listener.persona = svc->persona ? svc->persona->id : NULL;
-    s_listener.handler = ssh_conn;
-    s_listener.arg = svc;
-    return mp_xport_listen(&s_listener);
+    mp_listener_cfg_t cfg = {
+        .vaddr = svc->bind.vaddr,
+        .port = svc->bind.port,
+        .name = "ssh",
+        .persona = svc->persona ? svc->persona->id : NULL,
+        .handler = ssh_conn,
+        .arg = svc,
+        .xport = mp_service_xport(svc),
+    };
+    return mp_xport_listen(&cfg);
 }
 
 static const mp_service_ops_t s_ops = {

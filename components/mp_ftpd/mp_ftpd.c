@@ -25,7 +25,6 @@ static const char *TAG = "mp_ftpd";
 
 #define FTP_LINE_MAX 512
 
-static mp_listener_cfg_t s_listener;
 
 /* ------------------------------------------------------------ replies ---- */
 
@@ -406,19 +405,21 @@ static esp_err_t ftpd_start(mp_service_t *svc)
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    esp_err_t err = mp_ftpd_pasv_pool_start(svc->bind.vaddr);
+    esp_err_t err = mp_ftpd_pasv_pool_start(mp_service_xport(svc));
     if (err != ESP_OK) {
         return err;
     }
 
-    memset(&s_listener, 0, sizeof(s_listener));
-    s_listener.vaddr = svc->bind.vaddr;
-    s_listener.port = svc->bind.port;
-    s_listener.name = "ftpd";
-    s_listener.persona = svc->persona ? svc->persona->id : NULL;
-    s_listener.handler = ftpd_conn;
-    s_listener.arg = svc;
-    return mp_xport_listen(&s_listener);
+    mp_listener_cfg_t cfg = {
+        .vaddr = svc->bind.vaddr,
+        .port = svc->bind.port,
+        .name = "ftpd",
+        .persona = svc->persona ? svc->persona->id : NULL,
+        .handler = ftpd_conn,
+        .arg = svc,
+        .xport = mp_service_xport(svc),
+    };
+    return mp_xport_listen(&cfg);
 }
 
 static const mp_service_ops_t s_ops = {

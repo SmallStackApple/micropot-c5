@@ -37,7 +37,7 @@ typedef struct {
 /* ---- mp_ftpd_data.c ---- */
 
 /** Pre-register the PASV listener pool (no unlisten API; slots reuse). */
-esp_err_t mp_ftpd_pasv_pool_start(uint32_t vaddr);
+esp_err_t mp_ftpd_pasv_pool_start(const mp_xport_backend_t *xport);
 
 /** 0 admit (counters claimed), 1 refuse global, 2 refuse per-IP. */
 int  mp_ftpd_limit_admit(const mp_ftpd_behavior_t *b, uint32_t ip);

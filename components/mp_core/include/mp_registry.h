@@ -5,6 +5,7 @@
 #include "esp_err.h"
 #include "mp_service.h"
 #include "mp_persona.h"
+#include "mp_xport.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,12 +17,16 @@ extern "C" {
  */
 esp_err_t mp_registry_register(const mp_service_ops_t *ops, mp_bind_t bind);
 
+/** Backend a service instance should listen through: the persona's wire
+ *  profile backend, or NULL for the active default. */
+const mp_xport_backend_t *mp_service_xport(const mp_service_t *svc);
+
 /**
- * Start every registered service whose name is listed in @p persona.
- * If the persona lists no services, all registered services are started.
- * @p brand is handed to each service so it can read vendor behaviour.
+ * Start one service instance per (vdev, persona service) pair. Persona,
+ * brand and wire profile are resolved per vdev; a failing instance is
+ * skipped (logged) instead of aborting the rest.
  */
-esp_err_t mp_registry_start_all(const mp_persona_t *persona, const mp_brand_t *brand);
+esp_err_t mp_registry_start_all(void);
 
 void      mp_registry_stop_all(void);
 

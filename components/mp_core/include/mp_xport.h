@@ -72,9 +72,10 @@ typedef struct {
     const char       *persona; /* persona id stamped on the session, or NULL */
     mp_conn_handler_t handler;
     void             *arg;
+    const struct mp_xport_backend *xport; /* NULL = active default backend */
 } mp_listener_cfg_t;
 
-typedef struct {
+typedef struct mp_xport_backend {
     const char *name;
     esp_err_t (*listen)(const mp_listener_cfg_t *cfg);
 } mp_xport_backend_t;

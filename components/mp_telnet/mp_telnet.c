@@ -25,7 +25,6 @@ static const char *TAG = "mp_telnet";
 #define SHELL_TIMEOUT_MS   120000
 #define REBOOT_LINGER_MS   1000
 
-static mp_listener_cfg_t s_listener;
 
 /* --------------------------------------------------------- session logic */
 
@@ -209,14 +208,16 @@ static esp_err_t telnet_start(mp_service_t *svc)
                  svc->brand ? svc->brand->meta->id : "(null)");
         return ESP_ERR_NOT_SUPPORTED;
     }
-    memset(&s_listener, 0, sizeof(s_listener));
-    s_listener.vaddr = svc->bind.vaddr;
-    s_listener.port = svc->bind.port;
-    s_listener.name = "telnet";
-    s_listener.persona = svc->persona ? svc->persona->id : NULL;
-    s_listener.handler = telnet_conn;
-    s_listener.arg = svc;
-    return mp_xport_listen(&s_listener);
+    mp_listener_cfg_t cfg = {
+        .vaddr = svc->bind.vaddr,
+        .port = svc->bind.port,
+        .name = "telnet",
+        .persona = svc->persona ? svc->persona->id : NULL,
+        .handler = telnet_conn,
+        .arg = svc,
+        .xport = mp_service_xport(svc),
+    };
+    return mp_xport_listen(&cfg);
 }
 
 static const mp_service_ops_t s_ops = {

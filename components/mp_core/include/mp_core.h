@@ -9,4 +9,7 @@
 #include "mp_session.h"
 #include "mp_udp_listener.h"
 #include "mp_util.h"
+#include "mp_vdev.h"
+#include "mp_vif.h"
+#include "mp_wprof.h"
 #include "mp_xport.h"

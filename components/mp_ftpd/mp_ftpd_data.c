@@ -30,7 +30,6 @@ typedef struct {
 } pasv_slot_t;
 
 static pasv_slot_t s_pasv[PASV_SLOTS];
-static mp_listener_cfg_t s_pasv_listeners[PASV_SLOTS];
 
 /* connection limits: control sessions (421 past max_clients) and per
  * source IP (421 past max_per_ip). The table can never outgrow the global
@@ -155,20 +154,31 @@ void mp_ftpd_pasv_finish(ftp_t *f)
     }
 }
 
-esp_err_t mp_ftpd_pasv_pool_start(uint32_t vaddr)
+/* The pool binds the PASV port range on a wildcard address so every vdev's
+ * ftpd can accept data connections; the claiming control session owns the
+ * slot, so cross-vdev confusion cannot happen. Started once — subsequent
+ * ftpd instances share the pool. */
+esp_err_t mp_ftpd_pasv_pool_start(const mp_xport_backend_t *xport)
 {
+    static bool s_started;
+    if (s_started) {
+        return ESP_OK;
+    }
+    s_started = true;
     for (int i = 0; i < PASV_SLOTS; i++) {
         if (!s_pasv[i].conn_ready) {
             s_pasv[i].conn_ready = xSemaphoreCreateBinary();
             s_pasv[i].xfr_done = xSemaphoreCreateBinary();
         }
-        memset(&s_pasv_listeners[i], 0, sizeof(s_pasv_listeners[i]));
-        s_pasv_listeners[i].vaddr = vaddr;
-        s_pasv_listeners[i].port = PASV_PORT_BASE + (uint16_t)i;
-        s_pasv_listeners[i].name = "ftpd-data";
-        s_pasv_listeners[i].handler = pasv_data_task;
-        s_pasv_listeners[i].arg = &s_pasv[i];
-        esp_err_t err = mp_xport_listen(&s_pasv_listeners[i]);
+        mp_listener_cfg_t cfg = {
+            .vaddr = 0,
+            .port = PASV_PORT_BASE + (uint16_t)i,
+            .name = "ftpd-data",
+            .handler = pasv_data_task,
+            .arg = &s_pasv[i],
+            .xport = xport,
+        };
+        esp_err_t err = mp_xport_listen(&cfg);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "pasv listener %u failed: %s",
                      PASV_PORT_BASE + i, esp_err_to_name(err));

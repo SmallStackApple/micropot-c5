@@ -13,14 +13,12 @@
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
-#if CONFIG_MICROPOT_LINK_PROBES
-#include "esp_netif_net_stack.h"
 #include "lwip/etharp.h"
 #include "lwip/tcpip.h"
 #include "lwip/ip_addr.h"
 #include "ping/ping_sock.h"
-#endif
 #include "nvs_flash.h"
+#include "esp_netif_net_stack.h" /* esp_netif_get_netif_impl */
 
 #include "mp_core.h"
 #include "mp_brand_hikvision.h"
@@ -49,16 +47,14 @@ static void fatal_restart(const char *what)
     esp_restart();
 }
 
-static const mp_brand_t *select_brand(const mp_persona_t *persona)
+/* Register every compiled-in brand and wire profile. */
+static void register_all(void)
 {
-    /* Brand registry: one line per compiled-in brand module. */
     mp_brand_register(&mp_brand_hikvision);
     mp_brand_register(&mp_brand_router);
     mp_brand_register(&mp_brand_printer);
     mp_brand_register(&mp_brand_linux419);
-    /* Wire profiles: engines self-describe params+xport, one line each. */
     mp_wprof_register(&mp_wprof_linux419);
-    return mp_brand_find(persona->brand_id);
 }
 
 /* Emitted when the global session budget is exhausted; runs in accept-loop
@@ -78,6 +74,42 @@ static void log_started_services(void)
         mp_service_t *svc = mp_registry_at(i);
         if (svc->started) {
             mp_log_service(svc->ops->name, svc->bind.port, true);
+        }
+    }
+}
+
+/* Bring up every wire profile referenced by the vdev table (dedup by
+ * profile id; engine init is idempotent) and select the default backend
+ * from the primary persona. */
+static void wire_init(void)
+{
+    const char *inited[8];
+    size_t n_inited = 0;
+
+    for (size_t i = 0; i < mp_vdev_count(); i++) {
+        const mp_persona_t *p = mp_vdev_at(i)->persona;
+        if (!p || !p->wire) {
+            continue;
+        }
+        bool seen = false;
+        for (size_t j = 0; j < n_inited; j++) {
+            if (strcmp(inited[j], p->wire) == 0) {
+                seen = true;
+            }
+        }
+        if (seen) {
+            continue;
+        }
+        const mp_wprof_t *wp = mp_wprof_find(p->wire);
+        if (!wp) {
+            ESP_LOGE(TAG, "persona '%s' references unknown wire profile '%s'",
+                     p->id, p->wire);
+            continue;
+        }
+        ESP_ERROR_CHECK(wp->init(wp->params));
+        inited[n_inited++] = p->wire;
+        if (i == 0) {
+            mp_xport_use(wp->xport); /* primary persona's engine = default */
         }
     }
 }
@@ -199,10 +231,15 @@ void app_main(void)
      * component that registers keys or reads overrides (mp_log is first). */
     ESP_ERROR_CHECK(mp_cfg_init());
 
-    /* Persona/brand are pure data, so resolve them before bringing up the
-     * radio: the brand OUI and persona hostname are applied to the interface. */
-    const mp_persona_t *persona = mp_persona_active();
-    const mp_brand_t   *brand = select_brand(persona);
+    /* Persona/brand/vdev data is pure data, so resolve it before bringing
+     * up the radio: the primary brand's OUI and persona hostname are applied
+     * to the interface. */
+    register_all();
+    mp_vdev_load();
+
+    const mp_vdev_t *vdev0 = mp_vdev_at(0);
+    const mp_persona_t *persona = vdev0->persona;
+    const mp_brand_t   *brand = mp_brand_find(persona->brand_id);
     if (!brand) {
         ESP_LOGE(TAG, "persona '%s' references unknown brand '%s'", persona->id,
                  persona->brand_id);
@@ -211,28 +248,19 @@ void app_main(void)
     mp_log_set_persona(persona->id);
     ESP_LOGI(TAG, "persona '%s' -> brand '%s' (%s %s)", persona->id, brand->meta->id,
              brand->meta->vendor, brand->meta->model);
-    if (brand->init) {
-        ESP_ERROR_CHECK(brand->init(brand));
-    }
 
     /* The network stack (esp_netif/lwIP) must be up before anything creates a
      * socket, which is why mp_net_init() precedes mp_log_init(). */
     ESP_ERROR_CHECK(mp_net_init(brand->meta->mac_oui, persona->hostname));
+    /* Alias ARP responder on the wrapped netif input path. */
+    ESP_ERROR_CHECK(mp_vif_install(esp_netif_get_netif_impl(mp_net_netif())));
 
     ESP_ERROR_CHECK(mp_log_init());
     mp_xport_set_overload_hook(on_session_overload);
 
-    /* The wire personality (Linux-4.19-behaving TCP/IP engine) is bound by
-     * wire profile id, fully decoupled from the brand: personas pick an L7
-     * identity, profiles carry the L3/L4 one, vdevs compose the two. */
-    if (persona->wire) {
-        const mp_wprof_t *wp = mp_wprof_find(persona->wire);
-        if (!wp) {
-            fatal_restart("persona references unknown wire profile");
-        }
-        ESP_ERROR_CHECK(wp->init(wp->params));
-        mp_xport_use(wp->xport);
-    }
+    /* Wire personalities (Linux-4.19-behaving TCP/IP engines) are bound by
+     * wire profile id per vdev — fully decoupled from brands. */
+    wire_init();
 
     mp_registry_register(mp_telnet_get_ops(), mp_bind_any(CONFIG_MICROPOT_TELNET_PORT));
     mp_registry_register(mp_http_ui_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));
@@ -254,13 +282,38 @@ void app_main(void)
         ESP_LOGW(TAG, "no IP obtained within timeout, starting services anyway");
     }
 
-    err = mp_registry_start_all(persona, brand);
+    err = mp_registry_start_all();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "failed to start all services: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "failed to start services: %s", esp_err_to_name(err));
         mp_registry_stop_all();
         fatal_restart("service start failed");
     }
     log_started_services();
+
+    /* vdev inventory + narrative coherence: distinct brand vendors on one
+     * shared MAC read as "one box with aliases" — warn, don't forbid. */
+    const char *va, *vb;
+    if (!mp_vdev_vendor_coherent(&va, &vb)) {
+        ESP_LOGW(TAG, "mixed vendors on one MAC (%s vs %s): aliases read as "
+                 "one multi-identity host", va, vb);
+        mp_evt_t e;
+        mp_evt_begin(&e, NULL, "system", "config_warn");
+        mp_evt_str(&e, "msg", "mixed brand vendors share one MAC");
+        mp_evt_str(&e, "vendor_a", va);
+        mp_evt_str(&e, "vendor_b", vb);
+        mp_evt_send(&e);
+    }
+    for (size_t i = 1; i < mp_vdev_count(); i++) {
+        const mp_vdev_t *v = mp_vdev_at(i);
+        char ip[16];
+        mp_ip4_str(v->vaddr, ip, sizeof(ip));
+        mp_evt_t e;
+        mp_evt_begin(&e, NULL, "system", "vdev");
+        mp_evt_str(&e, "ip", ip);
+        mp_evt_str(&e, "persona", v->persona->id);
+        mp_evt_str(&e, "wire", v->persona->wire ? v->persona->wire : "lwip");
+        mp_evt_send(&e);
+    }
 
     char list[96] = "";
     for (size_t i = 0; i < mp_registry_count(); i++) {

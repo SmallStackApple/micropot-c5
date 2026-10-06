@@ -94,6 +94,19 @@ size_t mp_persona_count(void)
     return sizeof(s_personas) / sizeof(s_personas[0]);
 }
 
+const mp_persona_t *mp_persona_find(const char *id)
+{
+    if (!id) {
+        return NULL;
+    }
+    for (size_t i = 0; i < mp_persona_count(); i++) {
+        if (strcmp(s_personas[i].id, id) == 0) {
+            return &s_personas[i];
+        }
+    }
+    return NULL;
+}
+
 bool mp_persona_has_service(const mp_persona_t *p, const char *name)
 {
     if (!p || p->n_services == 0) {

@@ -116,14 +116,14 @@ static void conn_task(void *arg)
 
 typedef struct {
     int                       sock;
-    const mp_listener_cfg_t  *cfg;
+    mp_listener_cfg_t         cfg; /* owned copy — callers may pass stack-locals */
 } accept_ctx_t;
 
 static void accept_loop(void *arg)
 {
     accept_ctx_t *ctx = (accept_ctx_t *)arg;
     int listen_sock = ctx->sock;
-    const mp_listener_cfg_t *cfg = ctx->cfg;
+    const mp_listener_cfg_t *cfg = &ctx->cfg;
 
     for (;;) {
         struct sockaddr_in peer;
@@ -166,7 +166,7 @@ static void accept_loop(void *arg)
         conn->ctx = (void *)(intptr_t)sock;
 
         a->conn = conn;
-        a->cfg = cfg;
+        a->cfg = &ctx->cfg;
         a->sess.sock = sock;
         a->sess.src_ip = peer.sin_addr.s_addr;
         a->sess.src_port = ntohs(peer.sin_port);
@@ -232,7 +232,7 @@ static esp_err_t sock_listen(const mp_listener_cfg_t *cfg)
         return ESP_ERR_NO_MEM;
     }
     ctx->sock = sock;
-    ctx->cfg = cfg;
+    ctx->cfg = *cfg;
 
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "%s-lstn", cfg->name);
