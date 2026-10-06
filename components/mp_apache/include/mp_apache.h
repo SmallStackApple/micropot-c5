@@ -7,7 +7,7 @@ extern "C" {
 #endif
 
 /** Apache-style HTTP honeypot on mp_xport (see mp_httpd.c). */
-const mp_service_ops_t *mp_httpd_get_ops(void);
+const mp_service_ops_t *mp_apache_get_ops(void);
 
 #ifdef __cplusplus
 }

@@ -18,7 +18,7 @@
 #include "mp_core.h"
 #include "mp_linekit.h"
 #include "mp_log.h"
-#include "mp_ssh.h"
+#include "mp_ssh_banner.h"
 #include "mp_ssh_behavior.h"
 
 static const char *TAG = "mp_ssh";
@@ -101,7 +101,7 @@ static const mp_service_ops_t s_ops = {
     .stop = NULL,
 };
 
-const mp_service_ops_t *mp_ssh_get_ops(void)
+const mp_service_ops_t *mp_ssh_banner_get_ops(void)
 {
     return &s_ops;
 }

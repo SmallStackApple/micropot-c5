@@ -22,7 +22,7 @@
 #include "esp_timer.h"
 
 #include "mp_core.h"
-#include "mp_httpd.h"
+#include "mp_apache.h"
 #include "mp_httpd_behavior.h"
 #include "mp_linekit.h"
 #include "mp_log.h"
@@ -455,7 +455,7 @@ static const mp_service_ops_t s_ops = {
     .stop = NULL,
 };
 
-const mp_service_ops_t *mp_httpd_get_ops(void)
+const mp_service_ops_t *mp_apache_get_ops(void)
 {
     return &s_ops;
 }

@@ -9,7 +9,7 @@
 #include "esp_timer.h"
 #include "mp_core.h"
 #include "mp_form.h"
-#include "mp_http.h"
+#include "mp_http_ui.h"
 #include "mp_http_behavior.h"
 #include "mp_log.h"
 
@@ -244,7 +244,7 @@ static const mp_service_ops_t s_ops = {
     .stop = http_stop,
 };
 
-const mp_service_ops_t *mp_http_get_ops(void)
+const mp_service_ops_t *mp_http_ui_get_ops(void)
 {
     return &s_ops;
 }

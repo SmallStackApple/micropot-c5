@@ -53,7 +53,7 @@ idf.py size
 - **wolfSSH allocations are PSRAM-aware.** On ESP-IDF the vendored wolfSSL
   defaults `XMALLOC` to `pvPortMalloc()` (internal only). The sshd component
   defines `XMALLOC_USER` for the wolfSSL/wolfSSH targets and provides
-  `XMALLOC`/`XREALLOC`/`XFREE` in `components/mp_sshd/mp_wolfmem.c`:
+  `XMALLOC`/`XREALLOC`/`XFREE` in `components/mp_ssh_server/mp_wolfmem.c`:
   requests ≥ `MP_WOLFMEM_PSRAM_MIN` (2 KB) try PSRAM first and fall back to
   internal memory, smaller ones stay internal. `mp_wolfmem_anchor()` is
   called from `sshd_start()` to keep the object in the link.

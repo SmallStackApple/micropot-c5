@@ -6,10 +6,10 @@ idf_component_register(
         mp_log
         mp_net
         mp_telnet
-        mp_http
-        mp_httpd
-        mp_ssh
-        mp_sshd
+        mp_http_ui
+        mp_apache
+        mp_ssh_banner
+        mp_ssh_server
         mp_ftpd
         mp_brand_hikvision
         mp_brand_router

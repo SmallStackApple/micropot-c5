@@ -24,11 +24,12 @@ or protocols see [`EXTENDING.md`](EXTENDING.md).
         brand-agnostic    |                  |  brand modules (data + hooks)
    +----------------------+                  +--------------------------+
    |        |        |         |                                     |
-mp_telnet mp_http  mp_ssh   mp_httpd  mp_sshd  mp_ftpd      mp_brand_hikvision
-          _ui      _banner           (ssh server)          mp_brand_router
-                                                           mp_brand_printer
-                                                           mp_brand_linux419
-                                                           (+ fs + host keys)
+mp_telnet mp_http_ui mp_ssh_banner mp_apache mp_ssh_server mp_ftpd
+                                                    mp_brand_hikvision
+                                                    mp_brand_router
+                                                    mp_brand_printer
+                                                    mp_brand_linux419
+                                                    (+ fs + host keys)
    mp_stack419: Linux 4.19 wire behaviour (raw-PCB TCP/IP)
        ^
        |

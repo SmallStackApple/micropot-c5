@@ -19,27 +19,29 @@ new protocol or a new brand is a pure add-on — no edits to shared code.
 
 ```
                        +-------------------------------+
-                       |            mp_core             |
-  persona (instance)   |  service registry              |
-       +-------------> |  brand registry (open, keyed   |
-                       |    by protocol name)           |
-                       |  mp_xport: transport backends  |
-                       |  + global session budget       |
+  persona (instance)   |            mp_core            |
+       +-------------> |  service registry             |
+                       |  brand registry (open, keyed  |
+                       |    by protocol name)          |
+                       |  mp_xport: transport backends |
+                       |  + global session budget      |
                        +-------------------------------+
                               ^              ^
              brand-agnostic   |              |   brand modules (data + hooks)
        +----------------------+              +---------------------+
-       |       |       |      |       |                           |
-  mp_telnet mp_http mp_ssh    |       |      mp_brand_hikvision / _router / _printer
-  mp_ftpd   mp_httpd mp_sshd  |       |      mp_brand_linux419 (+fs, +host keys)
-       |       |       |    mp_stack419: Linux 4.19 wire behaviour
-       |       |       |    (raw-PCB TCP/IP: ISN/options/resets/ICMP
-       +-------+-------+      per v4.19 sources; "s419" xport backend)
-               v
-        mp_log: generic event bus (mp_evt_*) --UDP/TCP--> log_collector.py
+       |                 |                    |                     |
+  mp_telnet        mp_http_ui           mp_brand_hikvision / _router / _printer
+  mp_ftpd          mp_apache            mp_brand_linux419 (+fs, +host keys)
+                   mp_ssh_banner
+                   mp_ssh_server
+       |
+       |  mp_stack419: Linux 4.19 wire behaviour (raw-PCB TCP/IP:
+       |  ISN/options/resets/ICMP per v4.19 sources; "s419" backend)
+       v
+  mp_log: generic event bus (mp_evt_*) --UDP/TCP--> log_collector.py
 
-       mp_linekit: line/echo/IAC toolkit shared by text protocols
-       mp_linuxfs/mp_linuxsh: fake filesystem + bash-flavoured shell
+  mp_linekit: line/echo/IAC toolkit shared by text protocols
+  mp_linuxfs/mp_linuxsh: fake filesystem + bash-flavoured shell
 ```
 
 Two invariants keep the system extensible:
@@ -68,10 +70,10 @@ of lwIP's TCP (see below).
 | `components/mp_linuxfs` | fake filesystem primitives (static tree, lookup, path normalisation) |
 | `components/mp_linuxsh` | bash-flavoured shell: real cwd, fs commands, live ifconfig/ip/route, wget/curl URL harvest |
 | `components/mp_telnet` | Telnet honeypot interpreter (canned or shell-hook driven) |
-| `components/mp_http` | HTTP management-page honeypot (`esp_http_server`, lwIP brands) |
-| `components/mp_httpd` | Apache/2.4.38-style HTTP server on mp_xport |
-| `components/mp_ssh` | banner-level SSH honeypot (client-banner harvester) |
-| `components/mp_sshd` | real SSH-2.0 transport (wolfSSH), OpenSSH 7.9p1 identity, password capture + shell |
+| `components/mp_http_ui` | HTTP management-page honeypot (`esp_http_server`, lwIP brands) |
+| `components/mp_apache` | Apache/2.4.38-style HTTP server on mp_xport |
+| `components/mp_ssh_banner` | banner-level SSH honeypot (client-banner harvester) |
+| `components/mp_ssh_server` | real SSH-2.0 transport (wolfSSH), OpenSSH 7.9p1 identity, password capture + shell |
 | `components/mp_ftpd` | vsftpd 3.0.3-style FTP honeypot, read-only fs, PASV pool |
 | `components/brands/mp_brand_*` | HIKVISION camera / TP-LINK router / HP printer / Linux 4.19 server behaviour tables (+ file tree, SSH host keys) |
 | `main` | Kconfig + boot sequence |
@@ -276,7 +278,7 @@ python3 tools/golden_check.py logs/baseline/micropot-*.jsonl \
 - **New brand**: add `components/brands/mp_brand_xxx/` with a `behaviors[]`
   table (+ `www/` pages), add it to `main`'s `REQUIRES` and register it in
   `select_brand()`.
-- **New protocol**: copy `components/mp_ssh/` as the template — define a
+- **New protocol**: copy `components/mp_ssh_banner/` as the template — define a
   behaviour struct in the component's own header, interpret it from brand
   data, emit events via `mp_evt_*`, register in `main` with one line. Text
   protocols should build on `mp_linekit`; UDP protocols on

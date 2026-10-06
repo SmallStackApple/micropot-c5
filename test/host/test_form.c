@@ -1,4 +1,4 @@
-/* Host tests for the form parser (components/mp_http/mp_form.c). */
+/* Host tests for the form parser (components/mp_http_ui/mp_form.c). */
 #include "test_util.h"
 
 #include "mp_form.h"

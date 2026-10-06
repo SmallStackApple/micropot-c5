@@ -25,7 +25,7 @@
 
 static const char *TAG = "s419_xport";
 
-/* Per-connection task stack. mp_httpd nests ~3.5KB of response buffers
+/* Per-connection task stack. mp_apache nests ~3.5KB of response buffers
  * (hdr/body/canned error pages) across its call chain and picolibc's
  * snprintf adds a fat frame on top — 4KB overflowed under nmap -sV. The
  * task only touches the s419 TCBs (already PSRAM) and sockets, so the

@@ -7,7 +7,7 @@ extern "C" {
 #endif
 
 /** OpenSSH-style SSH honeypot with real KEX (wolfSSH, see mp_sshd.c). */
-const mp_service_ops_t *mp_sshd_get_ops(void);
+const mp_service_ops_t *mp_ssh_server_get_ops(void);
 
 #ifdef __cplusplus
 }
