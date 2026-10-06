@@ -310,8 +310,11 @@ esp_err_t s419_udp_listen(uint32_t vaddr, uint16_t port,
     if (s_n_udp_listeners >= S419_MAX_UDP_LISTENERS) {
         return ESP_ERR_NO_MEM;
     }
-    if (s419_udp_listener_find(vaddr, port)) {
-        return ESP_ERR_INVALID_STATE;
+    for (size_t i = 0; i < s_n_udp_listeners; i++) {
+        if (s_udp_listeners[i].port == port &&
+            s_udp_listeners[i].vaddr == vaddr) {
+            return ESP_ERR_INVALID_STATE; /* exact duplicate only */
+        }
     }
     s419_udp_listener_t *l = &s_udp_listeners[s_n_udp_listeners++];
     l->vaddr = vaddr;
@@ -348,8 +351,12 @@ esp_err_t s419_listener_add(uint32_t vaddr, uint16_t port, const char *name,
     if (s_n_listeners >= S419_MAX_LISTENERS) {
         return ESP_ERR_NO_MEM;
     }
-    if (s419_listener_find(vaddr, port)) {
-        return ESP_ERR_INVALID_STATE;
+    /* exact duplicate only: a wildcard listener must not block an
+     * alias-specific one on the same port (and vice versa) */
+    for (size_t i = 0; i < s_n_listeners; i++) {
+        if (s_listeners[i].port == port && s_listeners[i].vaddr == vaddr) {
+            return ESP_ERR_INVALID_STATE;
+        }
     }
     s419_listener_t *l = &s_listeners[s_n_listeners++];
     l->vaddr = vaddr;

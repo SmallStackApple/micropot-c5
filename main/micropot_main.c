@@ -312,8 +312,9 @@ void app_main(void)
         mp_evt_t e;
         mp_evt_begin(&e, NULL, "system", "vdev");
         mp_evt_str(&e, "ip", ip);
-        mp_evt_str(&e, "persona", v->persona->id);
-        mp_evt_str(&e, "wire", v->persona->wire ? v->persona->wire : "lwip");
+        mp_evt_str(&e, "persona", v->persona ? v->persona->id : "mgmt");
+        mp_evt_str(&e, "wire",
+                   v->persona && v->persona->wire ? v->persona->wire : "lwip");
         mp_evt_send(&e);
     }
 

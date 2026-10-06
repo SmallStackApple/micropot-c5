@@ -191,7 +191,9 @@ static void ring_mount(void)
         .base_path = "/spiffs",
         .partition_label = "storage",
         .max_files = 5,
-        .format_if_mount_failed = false,
+        /* first boot on a fresh partition formats it; afterwards mounts
+         * are pure reads of existing state */
+        .format_if_mount_failed = true,
     };
     if (esp_vfs_spiffs_register(&conf) != ESP_OK) {
         ESP_LOGW(TAG, "spiffs mount failed; ring spillover disabled");
