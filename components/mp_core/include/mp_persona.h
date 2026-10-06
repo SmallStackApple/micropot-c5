@@ -26,7 +26,7 @@ typedef struct {
     const char *services[MP_MAX_SERVICES];
     uint8_t     n_services;
     const char *hostname;
-    const char *transport;            /* xport backend: NULL/"lwip" or "s419" */
+    const char *wire;                 /* wire profile id (mp_wprof), NULL = lwIP */
 } mp_persona_t;
 
 /** Currently selected persona (chosen by Kconfig, or a runtime override). */

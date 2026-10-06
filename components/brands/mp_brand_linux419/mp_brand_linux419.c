@@ -17,7 +17,6 @@
 #include "mp_httpd_behavior.h"
 #include "mp_linuxsh.h"
 #include "mp_net.h"
-#include "mp_s419_params.h"
 #include "mp_ssh_behavior.h"
 #include "mp_sshd_behavior.h"
 #include "mp_telnet_behavior.h"
@@ -152,8 +151,6 @@ static const mp_brand_behavior_entry_t s_behaviors[] = {
     { "ssh",      &s_ssh      },
     { "sshd",     &s_sshd     },
     { "ftpd",     &s_ftpd     },
-    /* Linux 4.19 TCP/IP wire personality for the stack419 engine */
-    { "stack419", &mp_s419_params_linux419 },
     { NULL, NULL },
 };
 

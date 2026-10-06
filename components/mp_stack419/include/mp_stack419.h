@@ -2,6 +2,7 @@
 
 #include "esp_err.h"
 #include "mp_s419_params.h"
+#include "mp_wprof.h"
 #include "mp_xport.h"
 
 #ifdef __cplusplus
@@ -39,6 +40,10 @@ uint16_t mp_s419_tcb_count(void);
 
 /** The xport backend that routes listeners/connections through the engine. */
 extern const mp_xport_backend_t mp_xport_s419;
+
+/** Wire profile bundling the generic nmap "Fingerprint Linux 4.19" params
+ *  with this engine — registered into mp_wprof by the app. */
+extern const mp_wprof_t mp_wprof_linux419;
 
 #ifdef __cplusplus
 }

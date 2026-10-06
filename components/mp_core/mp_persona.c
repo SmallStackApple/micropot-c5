@@ -40,7 +40,7 @@ static const mp_persona_t s_personas[] = {
         .services = { "telnet", "httpd", "sshd", "ftpd" },
         .n_services = 4,
         .hostname = "linux",
-        .transport = "s419",
+        .wire = "linux419",
     },
 };
 

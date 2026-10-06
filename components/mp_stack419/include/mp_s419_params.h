@@ -11,9 +11,10 @@ extern "C" {
  * Linux 4.19 TCP/IP behaviour parameters
  *
  * The stack engine (mp_stack419) is brand-agnostic: everything that makes
- * the wire personality "Linux 4.19" lives in this parameter block, handed
- * out by the brand as a behaviour blob keyed "stack419". Presets below are
- * derived from nmap-os-db "Fingerprint Linux 4.19" records.
+ * the wire personality "Linux 4.19" lives in this parameter block, carried
+ * by the wire profile (mp_wprof) that a virtual device binds to — brands
+ * never see it. Presets below are derived from nmap-os-db "Fingerprint
+ * Linux 4.19" records.
  * ---------------------------------------------------------------------- */
 
 typedef struct {

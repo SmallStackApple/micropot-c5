@@ -49,3 +49,15 @@ esp_err_t mp_stack419_init(const mp_s419_params_t *params)
     ESP_LOGI(TAG, "Linux 4.19 TCP/IP engine initialised");
     return ESP_OK;
 }
+
+static esp_err_t wprof_init_thunk(const void *params)
+{
+    return mp_stack419_init((const mp_s419_params_t *)params);
+}
+
+const mp_wprof_t mp_wprof_linux419 = {
+    .id = "linux419",
+    .init = wprof_init_thunk,
+    .params = &mp_s419_params_linux419,
+    .xport = &mp_xport_s419,
+};

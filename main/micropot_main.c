@@ -56,6 +56,8 @@ static const mp_brand_t *select_brand(const mp_persona_t *persona)
     mp_brand_register(&mp_brand_router);
     mp_brand_register(&mp_brand_printer);
     mp_brand_register(&mp_brand_linux419);
+    /* Wire profiles: engines self-describe params+xport, one line each. */
+    mp_wprof_register(&mp_wprof_linux419);
     return mp_brand_find(persona->brand_id);
 }
 
@@ -220,17 +222,16 @@ void app_main(void)
     ESP_ERROR_CHECK(mp_log_init());
     mp_xport_set_overload_hook(on_session_overload);
 
-    /* Personas that emulate a Linux host run their services on the
-     * Linux-4.19-behaving TCP/IP engine instead of lwIP sockets. The wire
-     * parameters arrive as a brand behaviour blob, keeping the engine
-     * itself brand-agnostic. */
-    if (persona->transport && strcmp(persona->transport, "s419") == 0) {
-        const mp_s419_params_t *par = mp_brand_behavior(brand, "stack419");
-        if (!par) {
-            fatal_restart("persona wants s419 but brand has no stack419 behaviour");
+    /* The wire personality (Linux-4.19-behaving TCP/IP engine) is bound by
+     * wire profile id, fully decoupled from the brand: personas pick an L7
+     * identity, profiles carry the L3/L4 one, vdevs compose the two. */
+    if (persona->wire) {
+        const mp_wprof_t *wp = mp_wprof_find(persona->wire);
+        if (!wp) {
+            fatal_restart("persona references unknown wire profile");
         }
-        ESP_ERROR_CHECK(mp_stack419_init(par));
-        mp_xport_use(&mp_xport_s419);
+        ESP_ERROR_CHECK(wp->init(wp->params));
+        mp_xport_use(wp->xport);
     }
 
     mp_registry_register(mp_telnet_get_ops(), mp_bind_any(CONFIG_MICROPOT_TELNET_PORT));
