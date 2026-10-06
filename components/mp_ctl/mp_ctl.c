@@ -4,7 +4,8 @@
  * Wire format (one line per request, UDP datagram or TCP line):
  *     id=1 ts=1730000000 cmd=set k=log.port v=514 mac=<hmac-sha256 hex>
  * HMAC key = ctl.psk, message = the raw line up to " mac=" (so v= may
- * contain spaces). ts must increase monotonically per boot (anti-replay).
+ * contain spaces). ts = epoch milliseconds (u64), must increase
+ * monotonically per boot (anti-replay).
  *
  * Reply (one line, JSON):
  *     {"id":1,"ok":true,"result":...}  /  {"id":1,"ok":false,"err":"..."}
@@ -67,7 +68,7 @@ static bool ctl_acl(uint32_t src_ip)
 
 /* ------------------------------------------------------------------- HMAC */
 
-static uint32_t s_last_ts;
+static uint64_t s_last_ts;
 
 static bool mac_ok(const char *message, size_t msg_len, const char *mac_hex)
 {
@@ -310,7 +311,7 @@ static int ctl_exec(const char *line, char *out, size_t cap, const char *src)
         goto reply;
     }
     {
-        uint32_t ts = (uint32_t)strtoul(ts_s, NULL, 10);
+        uint64_t ts = strtoull(ts_s, NULL, 10);
         if (ts <= s_last_ts) {
             err = "stale ts";
             goto reply;

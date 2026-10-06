@@ -24,7 +24,9 @@ _id = 0
 def build_line(psk: str, cmd: str, key: str | None, value: str | None) -> bytes:
     global _id
     _id += 1
-    parts = [f"id={_id}", f"ts={int(time.time())}", f"cmd={cmd}"]
+    # millisecond ts: the device demands strictly increasing ts per boot,
+    # and second-granularity would rate-limit the CLI to one command/s.
+    parts = [f"id={_id}", f"ts={int(time.time() * 1000)}", f"cmd={cmd}"]
     if key is not None:
         parts.append(f"k={key}")
     msg = " ".join(parts)
