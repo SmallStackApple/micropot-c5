@@ -38,11 +38,11 @@ extern const uint8_t ssh_host_ecdsa_key_end[]   asm("_binary_ssh_host_ecdsa_key_
 
 /* ------------------------------------------------------- weak credentials */
 
-/* Servers are usually brute-forced on root; keep a small plausible set. */
+/* /etc/shadow carries exactly one hash per account, so the accepted set
+ * must be exactly the shadow's — a second working password for root
+ * would contradict what john cracks out of the box's own shadow. */
 static const mp_cred_t s_creds[] = {
     { .user = "root",  .pass = "toor" },
-    { .user = "root",  .pass = "root" },
-    { .user = "root",  .pass = "password" },
     { .user = "admin", .pass = "admin" },
 };
 
