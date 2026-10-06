@@ -92,11 +92,10 @@ bool s419_established(s419_tcb *tcb)
     const s419_listener_t *lst = tcb->listener;
 
     if (!mp_xport_budget_take()) {
-        ESP_LOGW(TAG, "%s: session budget exhausted, resetting %u.%u.%u.%u",
-                 lst->name,
-                 (unsigned)(tcb->rip & 0xff), (unsigned)((tcb->rip >> 8) & 0xff),
-                 (unsigned)((tcb->rip >> 16) & 0xff),
-                 (unsigned)((tcb->rip >> 24) & 0xff));
+        /* No per-connection WARN here: this is the tcpip thread, and a UART
+         * write per refused connection starves the idle task under a
+         * flood. The queued svc.overload event carries the same information
+         * without blocking. */
         s419_report_overload(lst);
         s419_tcp_active_reset(tcb);
         s419_tcb_unlink_free(tcb);

@@ -106,6 +106,17 @@ menu "MicroPot-C5 honeypot"
             int "Collector UDP/TCP port"
             range 1 65535
             default 9999
+
+        config MICROPOT_LOG_CONSOLE
+            bool "Echo every event to the serial console"
+            default n
+            help
+                Print each JSON event to the console in addition to shipping
+                it to the collector. Handy while developing, but the console
+                UART write is blocking: a flood of events keeps the logger
+                task busy and starves the idle task (task watchdog). Leave
+                this off for any build that must survive load testing; the
+                collector still receives every event.
     endmenu
 
 endmenu

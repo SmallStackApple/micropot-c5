@@ -171,7 +171,12 @@ static void ship(const mp_evt_t *m, uint32_t seq, char *line, size_t line_cap)
     line[n++] = '\n'; /* newline framing so TCP receivers can split */
     line[n] = '\0';
     transport_send(line, (size_t)n);
+#if CONFIG_MICROPOT_LOG_CONSOLE
+    /* Blocking UART write: fine while developing, but under an event flood
+     * it keeps this task (and thus the idle task) busy — see the Kconfig
+     * help. The collector is the authoritative sink. */
     fputs(line, stdout); /* line already carries its newline */
+#endif
 }
 
 /* ------------------------------------------------------------------ queue */

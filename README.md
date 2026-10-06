@@ -166,7 +166,12 @@ holds the attacker's own version string (scanner fingerprint);
 - **Flood safety**: all TCP listeners share one session budget; excess
   connections are accepted and closed immediately (`svc.overload`), and the
   log transport uses bounded connect/send timeouts so a dead collector can
-  never stall the honeypot.
+  never stall the honeypot. No code path logs per packet from the tcpip
+  thread (a blocking UART write there starves the idle task and trips the
+  task watchdog), and the events-to-console echo is **off by default**
+  (`CONFIG_MICROPOT_LOG_CONSOLE`); the collector is the event sink. Turn the
+  echo on in `menuconfig` only when actively developing, not while flood
+  testing.
 
 ## Configuration
 

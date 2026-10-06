@@ -108,7 +108,14 @@ void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo)
      * PBUF_LINK_ENCAPSULATION_HLEN, which is 0 in ESP-IDF. */
     struct pbuf *p = pbuf_alloc(PBUF_LINK, (u16_t)len, PBUF_RAM);
     if (!p) {
-        ESP_LOGD(TAG, "tx: pbuf alloc failed (%u)", (unsigned)len);
+        /* Memory-pressure symptom; rate-limited like the raw_sendto failure
+         * below so it cannot flood the tcpip thread's UART under load. */
+        int64_t now = s419_now_ms();
+        if (now - s_last_tx_warn_ms >= 2000) {
+            s_last_tx_warn_ms = now;
+            ESP_LOGW(TAG, "tx: pbuf alloc failed (%u) (throttled)",
+                     (unsigned)len);
+        }
         return;
     }
     pbuf_take(p, pkt, (u16_t)len);
@@ -340,12 +347,10 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
             /* discard */
         } else if (flags & S419_SYN) {
             if (!(flags & S419_FIN)) {
-                ESP_LOGI(TAG, "rx SYN %lu.%lu.%lu.%lu:%u -> :%u (%s)",
-                         (unsigned long)(ip_src >> 24),
-                         (unsigned long)((ip_src >> 16) & 0xff),
-                         (unsigned long)((ip_src >> 8) & 0xff),
-                         (unsigned long)(ip_src & 0xff),
-                         rport, lport, lst->name);
+                /* No per-packet logging here: this runs in the tcpip thread
+                 * and a blocking UART write per SYN starves the idle task
+                 * (task watchdog) under a flood. Connection attempts show
+                 * up as the services' *.connect events instead. */
                 s419_tcp_new_syn(lst, ip_dst, ip_src, lport, rport,
                                  th, tcp_len);
             } /* SYN+FIN: discard (T3: R=N) */
@@ -409,12 +414,8 @@ static u8_t on_icmp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     }
     /* Linux 4.19 answers echo requests with ANY code and copies the code
      * into the reply (icmp_reply reuses the received icmp_bxm) — nmap's
-     * IE(1) probe uses code 9 and expects R=Y, CD=S. */
-    ESP_LOGI(TAG, "rx ICMP echo from %lu.%lu.%lu.%lu",
-             (unsigned long)(s419_rd32(ip + 12) >> 24),
-             (unsigned long)((s419_rd32(ip + 12) >> 16) & 0xff),
-             (unsigned long)((s419_rd32(ip + 12) >> 8) & 0xff),
-             (unsigned long)(s419_rd32(ip + 12) & 0xff));
+     * IE(1) probe uses code 9 and expects R=Y, CD=S. No per-packet log:
+     * tcpip-thread UART writes starve the idle task under an ICMP flood. */
     uint8_t pkt[S419_MAX_PKT];
     size_t n = s419_build_icmp_echo_reply(pkt, ip, p->tot_len,
                                           s419_icmp_ipid(), s419_par);
