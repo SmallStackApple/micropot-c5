@@ -44,7 +44,10 @@ static const char *TAG = "mp_ctl";
 #define CTL_REPLY_MAX  1200
 #define CTL_UDP_QUEUE  4
 #define CTL_UDP_MAX    640
-#define CTL_TASK_STACK 6144
+/* 10 KiB: cred.* on_change runs sha512crypt (2 x 5000 rounds) synchronously
+ * in this task; the wolfSSL call chain needs ~4 KiB on top of the exec
+ * frame (6144 overflowed by ~224 B into the stack guard). */
+#define CTL_TASK_STACK 10240
 
 /* ------------------------------------------------------------ config keys */
 
