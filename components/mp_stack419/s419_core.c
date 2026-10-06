@@ -289,6 +289,7 @@ static const s419_udp_listener_t *s419_udp_listener_find(uint32_t vaddr,
                                                          uint16_t port)
 {
     const s419_udp_listener_t *wild = NULL;
+    uint32_t primary = mp_net_get_ip();
     for (size_t i = 0; i < s_n_udp_listeners; i++) {
         if (s_udp_listeners[i].port != port) {
             continue;
@@ -296,7 +297,7 @@ static const s419_udp_listener_t *s419_udp_listener_find(uint32_t vaddr,
         if (s_udp_listeners[i].vaddr == vaddr) {
             return &s_udp_listeners[i];
         }
-        if (s_udp_listeners[i].vaddr == 0) {
+        if (s_udp_listeners[i].vaddr == 0 && vaddr == primary) {
             wild = &s_udp_listeners[i];
         }
     }
@@ -324,11 +325,13 @@ esp_err_t s419_udp_listen(uint32_t vaddr, uint16_t port,
     return ESP_OK;
 }
 
-/* Exact vaddr match wins over the wildcard (vaddr 0 = primary), so two
- * personas can share a port on different virtual devices. */
+/* Exact vaddr match wins; the wildcard (vaddr 0) serves the PRIMARY
+ * address only — a persona on an alias must not leak the primary's
+ * services (a "router" answering with vsftpd would be a tell). */
 const s419_listener_t *s419_listener_find(uint32_t vaddr, uint16_t port)
 {
     const s419_listener_t *wild = NULL;
+    uint32_t primary = mp_net_get_ip();
     for (size_t i = 0; i < s_n_listeners; i++) {
         if (s_listeners[i].port != port) {
             continue;
@@ -336,7 +339,7 @@ const s419_listener_t *s419_listener_find(uint32_t vaddr, uint16_t port)
         if (s_listeners[i].vaddr == vaddr) {
             return &s_listeners[i];
         }
-        if (s_listeners[i].vaddr == 0) {
+        if (s_listeners[i].vaddr == 0 && vaddr == primary) {
             wild = &s_listeners[i];
         }
     }
