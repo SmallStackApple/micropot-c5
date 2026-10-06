@@ -136,9 +136,9 @@ static esp_err_t transport_open(void)
         }
     } else if (connect(s_sock, (const struct sockaddr *)&s_dest,
                        sizeof(s_dest)) < 0) {
-        /* UDP connect() only pins the default peer and enables async error
-         * delivery (ICMP port unreachable -> next send() fails), which is
-         * what lets the ring spillover notice a dead collector. */
+        /* UDP connect() pins the default peer (and on a full-posix stack
+         * would enable async error delivery; lwIP has none, so a dead
+         * UDP collector stays invisible — see the ring comment). */
         ESP_LOGW(TAG, "UDP connect failed errno=%d", errno);
     }
     return ESP_OK;
@@ -154,11 +154,7 @@ static bool transport_send(const char *buf, size_t len)
     }
     if (!s_use_tcp) {
         if (send(s_sock, buf, len, 0) < 0) {
-            /* ECONNREFUSED etc. from the connected UDP socket: collector
-             * unreachable -> caller spills to the SPIFFS ring. The first
-             * datagram after a collector death is still lost (the ICMP
-             * answer takes a round trip) — acceptable. */
-            ESP_LOGD(TAG, "UDP send failed errno=%d (collector down?)", errno);
+            ESP_LOGD(TAG, "UDP send failed errno=%d", errno);
             return false;
         }
         return true;
@@ -182,9 +178,10 @@ static bool transport_send(const char *buf, size_t len)
  * When the transport is down (TCP disconnected, WiFi gone, local socket
  * errors) events append to a two-slot ring in the "storage" partition;
  * when sends succeed again the logger drains oldest-first, tagging each
- * replayed line with "replay":true. The UDP socket is connect()ed so a
- * dead collector's ICMP port unreachable fails the next send and trips
- * the ring; only the first datagram after a death is lost.
+ * replayed line with "replay":true. UDP caveat: lwIP delivers no async
+ * errors to sockets, so a silently-dead UDP collector is undetectable
+ * at send time (the connect() only pins the peer) — guaranteed offline
+ * capture needs log.tcp=true, where send failure trips the ring.
  * Slot A is the current write file; on overflow it becomes B and a fresh A
  * starts (B is dropped). The logger task is the only writer and reader.
  */
