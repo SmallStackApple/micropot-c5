@@ -2,6 +2,7 @@
 
 #include "esp_log.h"
 #include "mp_brand.h"
+#include "mp_cfg.h"
 
 static const char *TAG = "mp_brand";
 
@@ -20,6 +21,15 @@ bool mp_creds_match(const mp_cred_t *creds, uint8_t n,
 {
     if (!creds || !user || !pass) {
         return false;
+    }
+    /* Runtime credential override (management plane): cred.<user> when
+     * registered (by the brand) and set. Empty string = no override. */
+    char key[24];
+    snprintf(key, sizeof(key), "cred.%.15s", user);
+    if (mp_cfg_is_overridden(key)) {
+        char pw[MP_CFG_STR_MAX + 1];
+        mp_cfg_str(key, pw, sizeof(pw));
+        return pw[0] && strcmp(pw, pass) == 0;
     }
     for (uint8_t i = 0; i < n; i++) {
         if (creds[i].user && creds[i].pass &&

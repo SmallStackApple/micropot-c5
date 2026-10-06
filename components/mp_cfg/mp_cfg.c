@@ -203,6 +203,9 @@ int mp_cfg_set(const char *key, const mp_cfg_value_t *v, const char *src)
     audit(s, v, false, src);
     s->val = *v;
     s->overridden = true;
+    if (s->def.on_change) {
+        s->def.on_change(key);
+    }
     return 0;
 }
 
@@ -225,6 +228,9 @@ int mp_cfg_unset(const char *key, const char *src)
     }
     s->val = s->def.dflt;
     s->overridden = false;
+    if (was && s->def.on_change) {
+        s->def.on_change(key);
+    }
     return 0;
 }
 
@@ -239,6 +245,9 @@ int mp_cfg_unset_all(const char *src)
     for (size_t i = 0; i < s_n; i++) {
         if (s_slots[i].overridden) {
             audit(&s_slots[i], NULL, true, src);
+        }
+        if (s_slots[i].overridden && s_slots[i].def.on_change) {
+            s_slots[i].def.on_change(s_slots[i].def.key);
         }
         s_slots[i].val = s_slots[i].def.dflt;
         s_slots[i].overridden = false;

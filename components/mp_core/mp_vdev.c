@@ -33,8 +33,8 @@ static size_t    s_n;
 
 static const mp_cfg_key_t s_cfg_keys[] = {
 #define MP_VDEV_KEY(n, ip_dflt, persona_dflt) \
-    { "vdev" #n ".ip", MP_CFG_T_IP, { .u.str = ip_dflt }, 0, 0, NULL, false }, \
-    { "vdev" #n ".persona", MP_CFG_T_STR, { .u.str = persona_dflt }, 0, 0, NULL, false },
+    { "vdev" #n ".ip", MP_CFG_T_IP, { .u.str = ip_dflt }, 0, 0, NULL, false, NULL }, \
+    { "vdev" #n ".persona", MP_CFG_T_STR, { .u.str = persona_dflt }, 0, 0, NULL, false, NULL },
     MP_VDEV_SLOTS(MP_VDEV_KEY)
 #undef MP_VDEV_KEY
 };

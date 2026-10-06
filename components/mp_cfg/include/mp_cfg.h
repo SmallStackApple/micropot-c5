@@ -47,6 +47,9 @@ typedef struct {
     uint32_t      u32_max;
     bool        (*validate)(const mp_cfg_value_t *v); /* optional extra check */
     bool          secret;   /* value redacted in audits and listings */
+    /* called after a successful set/unset (value already stored), e.g. to
+     * regenerate derived state like /etc/shadow */
+    void        (*on_change)(const char *key);
 } mp_cfg_key_t;
 
 /* Storage backend: return 1 value found, 0 not found, <0 error. */

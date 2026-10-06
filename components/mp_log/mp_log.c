@@ -60,10 +60,10 @@ static uint32_t      s_dropped;
 #endif
 
 static const mp_cfg_key_t s_cfg_keys[] = {
-    { "log.host", MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_LOG_HOST }, 0, 0, NULL, false },
-    { "log.port", MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_LOG_PORT }, 1, 65535, NULL, false },
-    { "log.tcp",  MP_CFG_T_BOOL,{ .u.b = MP_CFG_DEFAULT_TCP }, 0, 0, NULL, false },
-    { "log.console", MP_CFG_T_BOOL, { .u.b = MP_CFG_DEFAULT_CONSOLE }, 0, 0, NULL, false },
+    { "log.host", MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_LOG_HOST }, 0, 0, NULL, false, NULL },
+    { "log.port", MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_LOG_PORT }, 1, 65535, NULL, false, NULL },
+    { "log.tcp",  MP_CFG_T_BOOL,{ .u.b = MP_CFG_DEFAULT_TCP }, 0, 0, NULL, false, NULL },
+    { "log.console", MP_CFG_T_BOOL, { .u.b = MP_CFG_DEFAULT_CONSOLE }, 0, 0, NULL, false, NULL },
 };
 
 /* -------------------------------------------------------------- transport */

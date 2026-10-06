@@ -25,6 +25,11 @@ extern const size_t      mp_linux419_fs_n;
 /** Shell interpreter configuration bound to the filesystem (linux419_fs.c). */
 extern const mp_linuxsh_config_t mp_linux419_shell_cfg;
 
+/** Regenerate /etc/shadow from the effective credentials (cfg overrides
+ *  else defaults), keeping the original salts. Called by brand init and by
+ *  the cred.* on_change hook. */
+void mp_linux419_shadow_rebuild(void);
+
 #ifdef __cplusplus
 }
 #endif

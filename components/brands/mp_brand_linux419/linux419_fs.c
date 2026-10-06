@@ -5,6 +5,8 @@
  * just a plain x86_64 Linux 4.19 host. File bodies use '\n' line endings;
  * renderers convert to CRLF.
  */
+#include "mp_cfg.h"
+#include "mp_crypt.h"
 #include "mp_linuxfs.h"
 #include "mp_linuxsh.h"
 
@@ -41,24 +43,49 @@ static const char s_group[] =
  * shadow into exactly the passwords ssh/telnet/ftp accept, or the story
  * falls apart. The easter egg lives in the SALTS (fully valid, up to 16
  * chars of [a-zA-Z0-9./]): root salts with a certain YouTube video ID,
- * admin with what it promises. */
-static const char s_shadow[] =
-    "root:$6$dQw4w9WgXcQ$3DMxPHyU8RNWcAE2zGUcDSdoR0lZo76uNi/osxPiOuAEoVUjUZ59ixE7UtAVIJNDBIYNzyN4UencdDcLHCZhP.:18345:0:99999:7:::\n"
-    "daemon:*:18345:0:99999:7:::\n"
-    "bin:*:18345:0:99999:7:::\n"
-    "sys:*:18345:0:99999:7:::\n"
-    "sync:*:18345:0:99999:7:::\n"
-    "games:*:18345:0:99999:7:::\n"
-    "man:*:18345:0:99999:7:::\n"
-    "lp:*:18345:0:99999:7:::\n"
-    "mail:*:18345:0:99999:7:::\n"
-    "news:*:18345:0:99999:7:::\n"
-    "proxy:*:18345:0:99999:7:::\n"
-    "www-data:*:18345:0:99999:7:::\n"
-    "backup:*:18345:0:99999:7:::\n"
-    "nobody:*:18345:0:99999:7:::\n"
-    "sshd:*:18345:0:99999:7:::\n"
-    "admin:$6$g1v3y0uup$5bJUmpHR/KFyTE0y9m78/Fr5bt..Y7W6S4UZiBzwI5aMOfdeZ4pG3BI1HXBrQpr.fr40prxWAbn2.h5TqpThW0:18345:0:99999:7:::\n";
+ * admin with what it promises.
+ *
+ * The buffer is rebuilt at runtime when cred.root/cred.admin change via
+ * the management plane: same salts, new hashes — the egg survives every
+ * password rotation. */
+#define SHADOW_SALT_ROOT  "dQw4w9WgXcQ"
+#define SHADOW_SALT_ADMIN "g1v3y0uup"
+
+static char s_shadow[1024];
+
+void mp_linux419_shadow_rebuild(void)
+{
+    char root_pw[MP_CFG_STR_MAX + 1], admin_pw[MP_CFG_STR_MAX + 1];
+    mp_cfg_str("cred.root", root_pw, sizeof(root_pw));
+    mp_cfg_str("cred.admin", admin_pw, sizeof(admin_pw));
+    if (!root_pw[0]) {
+        snprintf(root_pw, sizeof(root_pw), "toor");
+    }
+    if (!admin_pw[0]) {
+        snprintf(admin_pw, sizeof(admin_pw), "admin");
+    }
+    char root_h[120], admin_h[120];
+    mp_crypt_sha512(root_pw, SHADOW_SALT_ROOT, root_h, sizeof(root_h));
+    mp_crypt_sha512(admin_pw, SHADOW_SALT_ADMIN, admin_h, sizeof(admin_h));
+    snprintf(s_shadow, sizeof(s_shadow),
+             "root:%s:18345:0:99999:7:::\n"
+             "daemon:*:18345:0:99999:7:::\n"
+             "bin:*:18345:0:99999:7:::\n"
+             "sys:*:18345:0:99999:7:::\n"
+             "sync:*:18345:0:99999:7:::\n"
+             "games:*:18345:0:99999:7:::\n"
+             "man:*:18345:0:99999:7:::\n"
+             "lp:*:18345:0:99999:7:::\n"
+             "mail:*:18345:0:99999:7:::\n"
+             "news:*:18345:0:99999:7:::\n"
+             "proxy:*:18345:0:99999:7:::\n"
+             "www-data:*:18345:0:99999:7:::\n"
+             "backup:*:18345:0:99999:7:::\n"
+             "nobody:*:18345:0:99999:7:::\n"
+             "sshd:*:18345:0:99999:7:::\n"
+             "admin:%s:18345:0:99999:7:::\n",
+             root_h, admin_h);
+}
 
 static const char s_hostname[] = "linux\n";
 

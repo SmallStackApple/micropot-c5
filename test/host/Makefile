@@ -5,10 +5,11 @@
 # Sources under test are compiled straight out of the components; stubs/
 # provides the ESP/lwIP headers they reference.
 CC      ?= gcc
-CFLAGS  ?= -Wall -Wextra -Werror -std=c11 -g
+CFLAGS  ?= -Wall -Wextra -Werror -Wno-missing-field-initializers -std=c11 -g
 ROOT    := ../..
 
 INC := -Istubs \
+       -I$(ROOT)/components/mp_linuxfs/include \
        -I$(ROOT)/components/mp_core/include \
        -I$(ROOT)/components/mp_cfg/include \
        -I$(ROOT)/components/mp_log/include \
@@ -17,12 +18,16 @@ INC := -Istubs \
        -I$(ROOT)/components/mp_stack419/include \
        -I$(ROOT)/components/mp_stack419
 
-TESTS := test_cfg test_evt test_form test_linekit test_s419pkt
+TESTS := test_cfg test_crypt test_evt test_form test_linekit test_s419pkt
 
 all: run
 
 test_cfg: test_cfg.c $(ROOT)/components/mp_cfg/mp_cfg.c test_util.h
 	$(CC) $(CFLAGS) $(INC) -o $@ $< $(ROOT)/components/mp_cfg/mp_cfg.c
+
+test_crypt: test_crypt.c $(ROOT)/components/mp_linuxfs/mp_crypt.c test_util.h
+	$(CC) $(CFLAGS) -Wno-deprecated-declarations $(INC) -DMP_CRYPT_HOST -o $@ $< \
+	    $(ROOT)/components/mp_linuxfs/mp_crypt.c -lcrypto
 
 test_evt: test_evt.c $(ROOT)/components/mp_log/mp_evt.c test_util.h
 	$(CC) $(CFLAGS) $(INC) -o $@ $< $(ROOT)/components/mp_log/mp_evt.c

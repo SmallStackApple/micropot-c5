@@ -48,10 +48,10 @@ static const char *TAG = "mp_ctl";
 /* ------------------------------------------------------------ config keys */
 
 static const mp_cfg_key_t s_cfg_keys[] = {
-    { "mgmt.ip",   MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_MGMT_IP }, 0, 0, NULL, false },
-    { "ctl.port",  MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_CTL_PORT }, 1, 65535, NULL, false },
-    { "ctl.psk",   MP_CFG_T_STR, { .u.str = CONFIG_MICROPOT_CTL_PSK }, 0, 0, NULL, true },
-    { "ctl.admin", MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_CTL_ADMIN }, 0, 0, NULL, false },
+    { "mgmt.ip",   MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_MGMT_IP }, 0, 0, NULL, false, NULL },
+    { "ctl.port",  MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_CTL_PORT }, 1, 65535, NULL, false, NULL },
+    { "ctl.psk",   MP_CFG_T_STR, { .u.str = CONFIG_MICROPOT_CTL_PSK }, 0, 0, NULL, true, NULL },
+    { "ctl.admin", MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_CTL_ADMIN }, 0, 0, NULL, false, NULL },
 };
 
 static bool ctl_acl(uint32_t src_ip)

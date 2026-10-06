@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "mp_brand_linux419.h"
+#include "mp_cfg.h"
 #include "mp_ftpd_behavior.h"
 #include "mp_http_behavior.h"
 #include "mp_httpd_behavior.h"
@@ -39,10 +40,23 @@ extern const uint8_t ssh_host_ecdsa_key_end[]   asm("_binary_ssh_host_ecdsa_key_
 
 /* /etc/shadow carries exactly one hash per account, so the accepted set
  * must be exactly the shadow's — a second working password for root
- * would contradict what john cracks out of the box's own shadow. */
+ * would contradict what john cracks out of the box's own shadow.
+ * Runtime overrides (cred.root/cred.admin via mp_cfg) win over these;
+ * the shadow hash is regenerated on every change (same salt). */
 static const mp_cred_t s_creds[] = {
     { .user = "root",  .pass = "toor" },
     { .user = "admin", .pass = "admin" },
+};
+
+static void on_cred_change(const char *key)
+{
+    (void)key;
+    mp_linux419_shadow_rebuild();
+}
+
+static const mp_cfg_key_t s_cred_keys[] = {
+    { "cred.root",  MP_CFG_T_STR, { .u.str = "" }, 0, 0, NULL, true, on_cred_change },
+    { "cred.admin", MP_CFG_T_STR, { .u.str = "" }, 0, 0, NULL, true, on_cred_change },
 };
 
 /* ------------------------------------------------------------- HTTP pages */
@@ -162,6 +176,9 @@ static esp_err_t linux419_init(const mp_brand_t *self)
     s_sshd.key_ecdsa_len =
         (uint32_t)(ssh_host_ecdsa_key_end - ssh_host_ecdsa_key_start);
     s_ftpd.fs_n = mp_linux419_fs_n;
+    /* runtime credential overrides (management plane); empty = defaults */
+    mp_cfg_register(s_cred_keys, sizeof(s_cred_keys) / sizeof(s_cred_keys[0]));
+    mp_linux419_shadow_rebuild();
     return ESP_OK;
 }
 
