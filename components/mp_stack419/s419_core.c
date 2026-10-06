@@ -418,10 +418,6 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     uint16_t lport = s419_rd16(th + 2);
     uint8_t flags = th[13];
 
-    if (lport >= S419_EPHEMERAL_MIN) {
-        return 0; /* lwIP's own outbound flows (log collector) */
-    }
-
     s419_tcb *tcb = s419_tcb_find(ip_dst, ip_src, lport, rport);
     if (tcb) {
         s419_tcp_input(tcb, th, tcp_len, ip_src, ip_dst);
@@ -429,6 +425,11 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     }
 
     const s419_listener_t *lst = s419_listener_find(PP_HTONL(ip_dst), lport);
+    if (!lst && lport >= S419_EPHEMERAL_MIN) {
+        return 0; /* lwIP's own outbound flows (log collector) — checked
+                   * AFTER listeners so high-numbered service ports (the
+                   * mgmt plane sits at 55555) are not shadowed */
+    }
     if (lst) {
         if (flags & S419_ACK) {
             s419_tcp_closed_reset(ip_dst, ip_src, lport, rport, th, tcp_len);
@@ -472,10 +473,9 @@ static u8_t on_udp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     }
     const uint8_t *uh = ip + ihl;
     uint16_t dport = s419_rd16(uh + 2);
-    if (dport >= S419_EPHEMERAL_MIN || dport == UDP_PORT_DHCP_CLIENT) {
-        return 0; /* lwIP traffic (DNS/NTP/DHCP client) */
-    }
-    /* UDP listeners (management plane): ACL failure = filtered, silent. */
+    /* UDP listeners (management plane): ACL failure = filtered, silent.
+     * Checked before the ephemeral guard: listener ports may live above
+     * 49152 by configuration. */
     const s419_udp_listener_t *ul = s419_udp_listener_find(PP_HTONL(ip_dst), dport);
     if (ul) {
         if (ul->allow && !ul->allow(PP_HTONL(s419_rd32(ip + 12)))) {
@@ -487,6 +487,9 @@ static u8_t on_udp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
                         s419_rd16(uh + 0), uh + 8, udp_len - 8);
         }
         return eat(p);
+    }
+    if (dport >= S419_EPHEMERAL_MIN || dport == UDP_PORT_DHCP_CLIENT) {
+        return 0; /* lwIP traffic (DNS/NTP/DHCP client) */
     }
     /* UDP to a closed port: ICMP port unreachable (nmap U1 test). The
      * buffer must fit the fully-quoted offending packet (up to 576). */
