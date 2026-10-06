@@ -9,6 +9,12 @@ services (Telnet + HTTP + banner-level SSH) with structured JSON event logging
 to a PC collector. The architecture is protocol- and brand-agnostic: adding a
 new protocol or a new brand is a pure add-on — no edits to shared code.
 
+> **Documentation**
+> - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — component layering, transport & event model
+> - [`docs/MEMORY.md`](docs/MEMORY.md) — HP SRAM/PSRAM/flash budget and allocation policy
+> - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase 1 → phase 2 (multi virtual device)
+> - [`docs/EXTENDING.md`](docs/EXTENDING.md) — adding a brand / protocol / persona
+
 ## Architecture
 
 ```

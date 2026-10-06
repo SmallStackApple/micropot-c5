@@ -10,6 +10,16 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_QUAD=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
+# Allow PSRAM task stacks (xTaskCreateWithCaps). The connection/accept tasks
+# never touch flash, so a PSRAM stack is safe; see docs/MEMORY.md.
+CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y
+# malloc() policy: requests <= 16 KiB prefer internal HP SRAM, larger ones
+# (wolfSSH KEX bignums, 16 KiB channel windows) spill to PSRAM. The internal
+# reserve keeps the WiFi/lwIP stacks from being starved by PSRAM-capable
+# allocations. Pinned here (not just IDF defaults) so a fresh checkout
+# reproduces the measured memory profile.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 
 # --- Networking: more sockets for concurrent honeypot services + logger ----
 CONFIG_LWIP_MAX_SOCKETS=16
