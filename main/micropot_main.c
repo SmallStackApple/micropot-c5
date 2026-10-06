@@ -34,6 +34,7 @@
 #include "mp_log.h"
 #include "mp_ssh_server.h"
 #include "mp_net.h"
+#include "mp_perf.h"
 #include "mp_ssh_banner.h"
 #include "mp_stack419.h"
 #include "mp_telnet.h"
@@ -180,47 +181,20 @@ static void gw_arp_probe(void)
 }
 #endif /* CONFIG_MICROPOT_LINK_PROBES */
 
-/* Periodic health line, passive only: heap (internal min-ever catches slow
- * leaks during wolfSSH KEX), PSRAM (s419 rings), live session count, WiFi
- * RSSI, last-inbound-packet age and the tcpip-thread heartbeat. */
+#if CONFIG_MICROPOT_LINK_PROBES
+/* Link-probe rounds live here (debug only); the health line moved to
+ * mp_perf, which also feeds the collector. */
 static void stats_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_MICROPOT_LINK_PROBES ? 15000 : 30000));
-#if CONFIG_MICROPOT_LINK_PROBES
+        vTaskDelay(pdMS_TO_TICKS(15000));
         gw_arp_probe();
         gw_ping_once();
-#endif
-        int rssi = 0;
-        wifi_ap_record_t ap = { 0 };
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-            rssi = ap.rssi;
-        }
-        int64_t rx_age = mp_s419_rx_age_ms();
-        static uint32_t s_prev_tick;
-        uint32_t tick = mp_s419_tick_count();
-        uint32_t tick_delta = tick - s_prev_tick; /* ~3000/round when alive */
-        s_prev_tick = tick;
-#if CONFIG_MICROPOT_LINK_PROBES
-        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u tcbs %u rssi %d rx_age %llds gwping %dms gwarp %d tick +%lu",
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                 (unsigned)mp_xport_active(), (unsigned)mp_s419_tcb_count(), rssi,
-                 (long long)(rx_age < 0 ? -1 : rx_age / 1000), s_gw_rtt_ms,
-                 s_gw_arp, (unsigned long)tick_delta);
-#else
-        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u tcbs %u rssi %d rx_age %llds tick +%lu",
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                 (unsigned)mp_xport_active(), (unsigned)mp_s419_tcb_count(), rssi,
-                 (long long)(rx_age < 0 ? -1 : rx_age / 1000),
-                 (unsigned long)tick_delta);
-#endif
+        ESP_LOGI(TAG, "probes: gwping %dms gwarp %d", s_gw_rtt_ms, s_gw_arp);
     }
 }
+#endif /* CONFIG_MICROPOT_LINK_PROBES */
 
 void app_main(void)
 {
@@ -333,5 +307,9 @@ void app_main(void)
         }
     }
     ESP_LOGI(TAG, "honeypot ready: %s", list);
-    xTaskCreate(stats_task, "stats", 2048, NULL, 3, NULL);
+    /* performance monitor: serial stats line + system.perf events */
+    ESP_ERROR_CHECK(mp_perf_init());
+#if CONFIG_MICROPOT_LINK_PROBES
+    xTaskCreate(stats_task, "probes", 2048, NULL, 3, NULL);
+#endif
 }

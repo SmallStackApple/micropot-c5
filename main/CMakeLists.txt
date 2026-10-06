@@ -19,5 +19,6 @@ idf_component_register(
         mp_stack419
         mp_ctl
         mp_cli
+        mp_perf
         nvs_flash
 )
