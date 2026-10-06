@@ -35,25 +35,30 @@ idf.py size
 
 | Consumer | Size | Where | Notes |
 |----------|------|-------|-------|
-| lwIP connection task stack | 4 KB × sessions | HP SRAM | one per accepted TCP connection |
-| s419 connection task stack | 8 KB × sessions | HP SRAM | `S419_CONN_TASK_STACK` |
-| accept-loop task stack | 4 KB × listener | HP SRAM | one per listening socket |
-| logger task stack | 6 KB | HP SRAM | does NVS + sockets, stays internal |
-| event queue | 24 × `sizeof(mp_evt_t)` ≈ 11 KB | heap | bounded drop-on-full |
-| s419 RX/TX rings | 4 KB + 16 KB per TCB | PSRAM (fallback HP) | `s419_tcb_alloc()` |
-| UDP listener task stack | 4 KB × listener | HP SRAM | phase-2 UDP services |
-| wolfSSH KEX + channel | several KiB per in-flight KEX | HP SRAM by default | capped by `PREAUTH_MAX` (3) |
+| lwIP connection task stack | 4 KB × sessions | **PSRAM** | `xTaskCreateWithCaps`, freed with `vTaskDeleteWithCaps` |
+| s419 connection task stack | 8 KB × sessions | **PSRAM** | `S419_CONN_TASK_STACK`, same mechanism |
+| accept-loop task stack | 4 KB × listener | **PSRAM** | lwIP backend |
+| UDP listener task stack | 4 KB × listener | **PSRAM** | phase-2 UDP services |
+| event queue | 24 × `sizeof(mp_evt_t)` ≈ 11 KB | **PSRAM** | `xQueueCreateWithCaps`, bounded drop-on-full |
+| s419 RX/TX rings | 4 KB + 16 KB per TCB | **PSRAM** (fallback HP) | `s419_tcb_alloc()` |
+| wolfSSH KEX + channel | several KiB per in-flight KEX | **PSRAM for ≥2 KB**, else HP | `XMALLOC_USER` override, see below |
+| logger task stack | 6 KB | HP SRAM | does NVS + sockets, deliberately internal |
 
 ### Policy
 
-- **Connection stacks may live in PSRAM** (`xTaskCreateWithCaps`): the
+- **Connection stacks live in PSRAM** (`xTaskCreateWithCaps`): the
   connection/accept/UDP tasks never touch flash, so the cache-disable
-  window is not a hazard. The logger task deliberately stays on HP SRAM.
+  window is not a hazard. The logger task deliberately stays on HP SRAM
+  because it commits the NVS boot counter.
+- **wolfSSH allocations are PSRAM-aware.** On ESP-IDF the vendored wolfSSL
+  defaults `XMALLOC` to `pvPortMalloc()` (internal only). The sshd component
+  defines `XMALLOC_USER` for the wolfSSL/wolfSSH targets and provides
+  `XMALLOC`/`XREALLOC`/`XFREE` in `components/mp_sshd/mp_wolfmem.c`:
+  requests ≥ `MP_WOLFMEM_PSRAM_MIN` (2 KB) try PSRAM first and fall back to
+  internal memory, smaller ones stay internal. `mp_wolfmem_anchor()` is
+  called from `sshd_start()` to keep the object in the link.
 - **The internal reserve** `CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768`
   keeps `malloc()` from starving the WiFi/lwIP internal pool.
-- **Large, short-lived allocations** (wolfSSH KEX bignums, 16 KiB channel
-  windows) are steered to PSRAM via `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`
-  and/or explicit `heap_caps_malloc(MALLOC_CAP_SPIRAM)`.
 - **Session budget.** With HP SRAM free `F` bytes after static usage and a
   per-session cost `c` (stacks + buffers), the safe budget is roughly
   `min(CONFIG_MICROPOT_MAX_SESSIONS, F / c)`. Keep headroom for a burst of

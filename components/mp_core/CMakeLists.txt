@@ -9,5 +9,5 @@ idf_component_register(
         "mp_xport_lwip.c"
     INCLUDE_DIRS "include"
     REQUIRES esp_netif lwip
-    PRIV_REQUIRES esp_timer
+    PRIV_REQUIRES esp_timer heap
 )

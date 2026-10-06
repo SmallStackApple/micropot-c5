@@ -15,6 +15,7 @@
 #include "lwip/sockets.h"
 #include "netinet/tcp.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "mp_util.h"
@@ -25,6 +26,12 @@ static const char *TAG = "mp_xport_lwip";
 #define MP_LISTEN_BACKLOG  4
 #define MP_CONN_TASK_STACK 4096
 #define MP_CONN_TASK_PRIO  5
+
+/* Connection and accept tasks run entirely on sockets/lwIP and never touch
+ * flash, so their stacks can live in PSRAM and leave HP SRAM for the
+ * logger and lwIP hot paths. xTaskCreateWithCaps pairs with
+ * vTaskDeleteWithCaps (which supports self-deletion). */
+#define MP_TASK_CAPS MALLOC_CAP_SPIRAM
 
 /* POSIX raises SIGPIPE when writing to a closed peer; lwIP just returns an
  * error. Ask for the error so the honeypot task survives rude clients. */
@@ -104,7 +111,7 @@ static void conn_task(void *arg)
     a->conn->ops->release(a->conn);
     free(a);
     mp_xport_budget_give();
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 typedef struct {
@@ -179,8 +186,8 @@ static void accept_loop(void *arg)
         char task_name[16];
         snprintf(task_name, sizeof(task_name), "%s-%u", cfg->name,
                  (unsigned)(a->sess.id & 0xff));
-        if (xTaskCreate(conn_task, task_name, MP_CONN_TASK_STACK, a,
-                        MP_CONN_TASK_PRIO, NULL) != pdPASS) {
+        if (xTaskCreateWithCaps(conn_task, task_name, MP_CONN_TASK_STACK, a,
+                                MP_CONN_TASK_PRIO, NULL, MP_TASK_CAPS) != pdPASS) {
             ESP_LOGE(TAG, "%s: failed to spawn connection task", cfg->name);
             close(sock);
             free(conn);
@@ -228,8 +235,8 @@ static esp_err_t sock_listen(const mp_listener_cfg_t *cfg)
 
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "%s-lstn", cfg->name);
-    if (xTaskCreate(accept_loop, task_name, MP_CONN_TASK_STACK, ctx,
-                    MP_CONN_TASK_PRIO, NULL) != pdPASS) {
+    if (xTaskCreateWithCaps(accept_loop, task_name, MP_CONN_TASK_STACK, ctx,
+                            MP_CONN_TASK_PRIO, NULL, MP_TASK_CAPS) != pdPASS) {
         close(sock);
         free(ctx);
         return ESP_ERR_NO_MEM;

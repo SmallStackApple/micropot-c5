@@ -15,6 +15,7 @@
 #include "lwip/sockets.h"
 #include "nvs.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "mp_log.h"
@@ -248,13 +249,18 @@ esp_err_t mp_log_init(void)
     /* Socket is opened lazily on first send: the lwIP/tcpip stack must already
      * be initialised (esp_netif_init) before any socket() call. */
 
-    s_queue = xQueueCreate(MP_LOG_QUEUE_LEN, sizeof(mp_evt_t));
+    /* The ~11 KiB event queue lives in PSRAM: producers only call
+     * xQueueSend from task context (never an ISR), so it is safe there and
+     * keeps HP SRAM free. The logger task itself stays internal because it
+     * commits the NVS boot counter. */
+    s_queue = xQueueCreateWithCaps(MP_LOG_QUEUE_LEN, sizeof(mp_evt_t),
+                                   MALLOC_CAP_SPIRAM);
     if (!s_queue) {
         return ESP_ERR_NO_MEM;
     }
     if (xTaskCreate(logger_task, "mp_log", MP_LOG_TASK_STACK, NULL,
                     MP_LOG_TASK_PRIO, NULL) != pdPASS) {
-        vQueueDelete(s_queue);
+        vQueueDeleteWithCaps(s_queue);
         s_queue = NULL;
         return ESP_ERR_NO_MEM;
     }

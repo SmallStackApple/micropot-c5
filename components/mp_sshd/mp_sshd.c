@@ -27,6 +27,10 @@
 #include "mp_sshd.h"
 #include "mp_sshd_behavior.h"
 
+/* Defined in mp_wolfmem.c (XMALLOC/XFREE overrides). Called once so the
+ * linker keeps that object, which wolfSSL/wolfSSH references later. */
+void mp_wolfmem_anchor(void);
+
 static const char *TAG = "mp_sshd";
 
 /* wolfSSL's ESP user_settings.h delegates the RNG seed to us
@@ -327,6 +331,8 @@ done:
 
 static esp_err_t sshd_start(mp_service_t *svc)
 {
+    mp_wolfmem_anchor();
+
     const mp_sshd_behavior_t *b =
         svc->brand ? mp_brand_behavior(svc->brand, "sshd") : NULL;
     if (!b || !b->banner) {

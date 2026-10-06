@@ -6,6 +6,7 @@
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "mp_udp_listener.h"
@@ -15,6 +16,8 @@ static const char *TAG = "mp_udp";
 
 #define MP_UDP_TASK_STACK 4096
 #define MP_UDP_TASK_PRIO  5
+/* The receive loop only touches sockets, so its stack can be PSRAM-backed. */
+#define MP_UDP_TASK_CAPS  MALLOC_CAP_SPIRAM
 
 typedef struct {
     uint32_t src_ip;   /* network byte order */
@@ -70,7 +73,7 @@ static void udp_loop(void *arg)
     uint8_t *buf = malloc(MP_UDP_BUF_MAX);
     if (!buf) {
         ESP_LOGE(TAG, "%s: no memory for receive buffer", ctx->cfg->name);
-        vTaskDelete(NULL);
+        vTaskDeleteWithCaps(NULL);
     }
 
     for (;;) {
@@ -142,8 +145,8 @@ esp_err_t mp_udp_listener_start(const mp_udp_listener_cfg_t *cfg)
 
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "%s-udp", cfg->name);
-    if (xTaskCreate(udp_loop, task_name, MP_UDP_TASK_STACK, ctx,
-                    MP_UDP_TASK_PRIO, NULL) != pdPASS) {
+    if (xTaskCreateWithCaps(udp_loop, task_name, MP_UDP_TASK_STACK, ctx,
+                            MP_UDP_TASK_PRIO, NULL, MP_UDP_TASK_CAPS) != pdPASS) {
         close(sock);
         free(ctx);
         return ESP_ERR_NO_MEM;

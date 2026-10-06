@@ -14,6 +14,7 @@
 #include "freertos/task.h"
 #include "lwip/def.h"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -26,9 +27,12 @@ static const char *TAG = "s419_xport";
 
 /* Per-connection task stack. mp_httpd nests ~3.5KB of response buffers
  * (hdr/body/canned error pages) across its call chain and picolibc's
- * snprintf adds a fat frame on top — 4KB overflowed under nmap -sV. */
+ * snprintf adds a fat frame on top — 4KB overflowed under nmap -sV. The
+ * task only touches the s419 TCBs (already PSRAM) and sockets, so the
+ * stack itself can live in PSRAM too (freed by vTaskDeleteWithCaps). */
 #define S419_CONN_TASK_STACK 8192
 #define S419_CONN_TASK_PRIO  5
+#define S419_TASK_CAPS       MALLOC_CAP_SPIRAM
 
 /* ------------------------------------------------------------ conn ops */
 
@@ -77,7 +81,7 @@ static void conn_task(void *arg)
     a->conn->ops->release(a->conn);
     free(a);
     mp_xport_budget_give();
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 /* Handshake complete (tcpip thread). Spawn the connection task, or reset
@@ -140,8 +144,8 @@ bool s419_established(s419_tcb *tcb)
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "%s-%u", lst->name,
              (unsigned)(a->sess.id & 0xff));
-    if (xTaskCreate(conn_task, task_name, S419_CONN_TASK_STACK, a,
-                    S419_CONN_TASK_PRIO, NULL) != pdPASS) {
+    if (xTaskCreateWithCaps(conn_task, task_name, S419_CONN_TASK_STACK, a,
+                            S419_CONN_TASK_PRIO, NULL, S419_TASK_CAPS) != pdPASS) {
         ESP_LOGE(TAG, "%s: failed to spawn connection task", lst->name);
         tcb->conn = NULL;
         tcb->app_attached = false;
