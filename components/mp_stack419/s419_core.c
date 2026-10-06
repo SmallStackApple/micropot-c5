@@ -9,6 +9,7 @@
  * DF, IP ID and checksums are exactly what Linux 4.19 would emit.
  */
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "lwip/ip_addr.h"
@@ -285,6 +286,15 @@ typedef struct {
 static s419_udp_listener_t s_udp_listeners[S419_MAX_UDP_LISTENERS];
 static size_t              s_n_udp_listeners;
 
+/* debug: last closed-port queries (CLI 'listeners' dumps these) */
+static uint32_t s_dbg_rst_vaddr;
+static uint16_t s_dbg_rst_port;
+static uint32_t s_dbg_rst_count;
+static uint32_t s_dbg_guard_count;
+static uint16_t s_dbg_guard_port;
+static uint32_t s_dbg_unreach_count;
+static uint16_t s_dbg_unreach_port;
+
 static const s419_udp_listener_t *s419_udp_listener_find(uint32_t vaddr,
                                                          uint16_t port)
 {
@@ -429,6 +439,8 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 
     const s419_listener_t *lst = s419_listener_find(PP_HTONL(ip_dst), lport);
     if (!lst && lport >= S419_EPHEMERAL_MIN) {
+        s_dbg_guard_count++;
+        s_dbg_guard_port = lport;
         return 0; /* lwIP's own outbound flows (log collector) — checked
                    * AFTER listeners so high-numbered service ports (the
                    * mgmt plane sits at 55555) are not shadowed */
@@ -455,6 +467,9 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     }
 
     if (!(flags & S419_RST)) {
+        s_dbg_rst_vaddr = PP_HTONL(ip_dst);
+        s_dbg_rst_port = lport;
+        s_dbg_rst_count++;
         s419_tcp_closed_reset(ip_dst, ip_src, lport, rport, th, tcp_len);
     }
     return eat(p);
@@ -496,6 +511,8 @@ static u8_t on_udp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     }
     /* UDP to a closed port: ICMP port unreachable (nmap U1 test). The
      * buffer must fit the fully-quoted offending packet (up to 576). */
+    s_dbg_unreach_count++;
+    s_dbg_unreach_port = dport;
     uint8_t pkt[600];
     size_t n = s419_build_icmp_unreach(pkt, ip, p->tot_len, s419_icmp_ipid(),
                                        ip_dst, s419_rd32(ip + 12), s419_par);
@@ -620,4 +637,30 @@ void s419_core_init(const mp_s419_params_t *params)
 {
     s419_par = params;
     tcpip_callback_with_block(core_up, NULL, 1);
+}
+
+/* ------------------------------------------------------------- debug --- */
+
+void mp_s419_dump_listeners(void)
+{
+    printf("tcp listeners (%u/%u):\n", (unsigned)s_n_listeners,
+           (unsigned)S419_MAX_LISTENERS);
+    for (size_t i = 0; i < s_n_listeners; i++) {
+        printf("  [%2u] vaddr 0x%08lx port %5u  %s\n", (unsigned)i,
+               (unsigned long)s_listeners[i].vaddr, s_listeners[i].port,
+               s_listeners[i].name ? s_listeners[i].name : "?");
+    }
+    printf("udp listeners (%u):\n", (unsigned)s_n_udp_listeners);
+    for (size_t i = 0; i < s_n_udp_listeners; i++) {
+        printf("  [%2u] vaddr 0x%08lx port %5u\n", (unsigned)i,
+               (unsigned long)s_udp_listeners[i].vaddr,
+               s_udp_listeners[i].port);
+    }
+    printf("closed-rst: count %lu last vaddr 0x%08lx port %u\n",
+           (unsigned long)s_dbg_rst_count, (unsigned long)s_dbg_rst_vaddr,
+           s_dbg_rst_port);
+    printf("ephemeral-guard drops: %lu (last port %u)\n",
+           (unsigned long)s_dbg_guard_count, s_dbg_guard_port);
+    printf("udp unreach: count %lu (last port %u)\n",
+           (unsigned long)s_dbg_unreach_count, s_dbg_unreach_port);
 }

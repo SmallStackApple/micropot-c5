@@ -59,6 +59,9 @@ esp_err_t mp_s419_udp_listen(uint32_t vaddr, uint16_t port,
 void mp_s419_udp_send(uint32_t lip, uint32_t rip, uint16_t lport,
                       uint16_t rport, const void *data, size_t len);
 
+/** Debug: dump TCP/UDP listener tables and closed-port counters (CLI). */
+void mp_s419_dump_listeners(void);
+
 /** Wire profile bundling the generic nmap "Fingerprint Linux 4.19" params
  *  with this engine — registered into mp_wprof by the app. */
 extern const mp_wprof_t mp_wprof_linux419;

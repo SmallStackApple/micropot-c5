@@ -17,6 +17,7 @@
 
 #include "mp_cfg.h"
 #include "mp_log.h"
+#include "mp_stack419.h"
 #include "mp_util.h"
 #include "mp_vdev.h"
 #include "mp_xport.h"
@@ -31,6 +32,7 @@ static const char *const s_commands =
     "  reset                factory-reset all overrides (ask twice)\n"
     "  status               device snapshot\n"
     "  logstats             log pipeline counters\n"
+    "  listeners            dump s419 listener tables\n"
     "  logtest              emit a test event\n"
     "  reboot               restart\n";
 
@@ -184,6 +186,13 @@ static int cmd_status(int argc, char **argv)
     return 0;
 }
 
+static int cmd_listeners(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    mp_s419_dump_listeners();
+    return 0;
+}
+
 static int cmd_logstats(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -236,6 +245,7 @@ esp_err_t mp_cli_start(void)
         { .command = "list",     .help = "list all config keys",     .func = cmd_list },
         { .command = "reset",    .help = "reset CONFIRM",            .func = cmd_reset },
         { .command = "status",   .help = "device snapshot",          .func = cmd_status },
+        { .command = "listeners", .help = "dump s419 listener tables", .func = cmd_listeners },
         { .command = "logstats", .help = "log pipeline counters",    .func = cmd_logstats },
         { .command = "logtest",  .help = "emit a test event",        .func = cmd_logtest },
         { .command = "reboot",   .help = "restart the device",       .func = cmd_reboot },
