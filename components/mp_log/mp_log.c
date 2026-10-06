@@ -134,6 +134,12 @@ static esp_err_t transport_open(void)
         } else {
             ESP_LOGW(TAG, "TCP connect failed errno=%d (will retry)", errno);
         }
+    } else if (connect(s_sock, (const struct sockaddr *)&s_dest,
+                       sizeof(s_dest)) < 0) {
+        /* UDP connect() only pins the default peer and enables async error
+         * delivery (ICMP port unreachable -> next send() fails), which is
+         * what lets the ring spillover notice a dead collector. */
+        ESP_LOGW(TAG, "UDP connect failed errno=%d", errno);
     }
     return ESP_OK;
 }
@@ -147,8 +153,15 @@ static bool transport_send(const char *buf, size_t len)
         }
     }
     if (!s_use_tcp) {
-        return sendto(s_sock, buf, len, 0, (struct sockaddr *)&s_dest,
-                      sizeof(s_dest)) >= 0;
+        if (send(s_sock, buf, len, 0) < 0) {
+            /* ECONNREFUSED etc. from the connected UDP socket: collector
+             * unreachable -> caller spills to the SPIFFS ring. The first
+             * datagram after a collector death is still lost (the ICMP
+             * answer takes a round trip) — acceptable. */
+            ESP_LOGD(TAG, "UDP send failed errno=%d (collector down?)", errno);
+            return false;
+        }
+        return true;
     }
     if (!s_tcp_connected) {
         if (!tcp_connect(s_sock, &s_dest)) {
@@ -169,10 +182,9 @@ static bool transport_send(const char *buf, size_t len)
  * When the transport is down (TCP disconnected, WiFi gone, local socket
  * errors) events append to a two-slot ring in the "storage" partition;
  * when sends succeed again the logger drains oldest-first, tagging each
- * replayed line with "replay":true. UDP caveat: a silently-dead collector
- * is indistinguishable from delivery — full spillover guarantees need
- * log.tcp=true.
- *
+ * replayed line with "replay":true. The UDP socket is connect()ed so a
+ * dead collector's ICMP port unreachable fails the next send and trips
+ * the ring; only the first datagram after a death is lost.
  * Slot A is the current write file; on overflow it becomes B and a fresh A
  * starts (B is dropped). The logger task is the only writer and reader.
  */
