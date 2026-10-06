@@ -27,6 +27,7 @@
 #include "mp_brand_linux419.h"
 #include "mp_brand_printer.h"
 #include "mp_brand_router.h"
+#include "mp_cfg_esp.h"
 #include "mp_ftpd.h"
 #include "mp_http_ui.h"
 #include "mp_apache.h"
@@ -192,6 +193,9 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_erase());
         ESP_ERROR_CHECK(nvs_flash_init());
     }
+    /* Runtime config layer: opens the "mpc" NVS namespace; must precede any
+     * component that registers keys or reads overrides (mp_log is first). */
+    ESP_ERROR_CHECK(mp_cfg_init());
 
     /* Persona/brand are pure data, so resolve them before bringing up the
      * radio: the brand OUI and persona hostname are applied to the interface. */

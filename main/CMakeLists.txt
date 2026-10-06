@@ -3,6 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES
         mp_core
+        mp_cfg
         mp_log
         mp_net
         mp_telnet

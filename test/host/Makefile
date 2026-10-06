@@ -10,15 +10,19 @@ ROOT    := ../..
 
 INC := -Istubs \
        -I$(ROOT)/components/mp_core/include \
+       -I$(ROOT)/components/mp_cfg/include \
        -I$(ROOT)/components/mp_log/include \
        -I$(ROOT)/components/mp_http_ui/include \
        -I$(ROOT)/components/mp_linekit/include \
        -I$(ROOT)/components/mp_stack419/include \
        -I$(ROOT)/components/mp_stack419
 
-TESTS := test_evt test_form test_linekit test_s419pkt
+TESTS := test_cfg test_evt test_form test_linekit test_s419pkt
 
 all: run
+
+test_cfg: test_cfg.c $(ROOT)/components/mp_cfg/mp_cfg.c test_util.h
+	$(CC) $(CFLAGS) $(INC) -o $@ $< $(ROOT)/components/mp_cfg/mp_cfg.c
 
 test_evt: test_evt.c $(ROOT)/components/mp_log/mp_evt.c test_util.h
 	$(CC) $(CFLAGS) $(INC) -o $@ $< $(ROOT)/components/mp_log/mp_evt.c

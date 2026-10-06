@@ -18,6 +18,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "mp_cfg.h"
 #include "mp_log.h"
 #include "mp_util.h"
 
@@ -42,6 +43,25 @@ static char          s_persona[MP_LOG_PERSONA_MAX] = "unknown";
 
 static portMUX_TYPE  s_drop_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t      s_dropped;
+
+/* Config keys owned by this component; defaults come from Kconfig. */
+#if CONFIG_MICROPOT_LOG_PROTO_TCP
+#define MP_CFG_DEFAULT_TCP true
+#else
+#define MP_CFG_DEFAULT_TCP false
+#endif
+#if CONFIG_MICROPOT_LOG_CONSOLE
+#define MP_CFG_DEFAULT_CONSOLE true
+#else
+#define MP_CFG_DEFAULT_CONSOLE false
+#endif
+
+static const mp_cfg_key_t s_cfg_keys[] = {
+    { "log.host", MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_LOG_HOST }, 0, 0, NULL, false },
+    { "log.port", MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_LOG_PORT }, 1, 65535, NULL, false },
+    { "log.tcp",  MP_CFG_T_BOOL,{ .u.b = MP_CFG_DEFAULT_TCP }, 0, 0, NULL, false },
+    { "log.console", MP_CFG_T_BOOL, { .u.b = MP_CFG_DEFAULT_CONSOLE }, 0, 0, NULL, false },
+};
 
 /* -------------------------------------------------------------- transport */
 
@@ -171,12 +191,12 @@ static void ship(const mp_evt_t *m, uint32_t seq, char *line, size_t line_cap)
     line[n++] = '\n'; /* newline framing so TCP receivers can split */
     line[n] = '\0';
     transport_send(line, (size_t)n);
-#if CONFIG_MICROPOT_LOG_CONSOLE
-    /* Blocking UART write: fine while developing, but under an event flood
-     * it keeps this task (and thus the idle task) busy — see the Kconfig
-     * help. The collector is the authoritative sink. */
-    fputs(line, stdout); /* line already carries its newline */
-#endif
+    if (mp_cfg_bool("log.console", MP_CFG_DEFAULT_CONSOLE)) {
+        /* Blocking UART write: fine while developing, but under an event
+         * flood it keeps this task (and thus the idle task) busy — see the
+         * Kconfig help. The collector is the authoritative sink. */
+        fputs(line, stdout); /* line already carries its newline */
+    }
 }
 
 /* ------------------------------------------------------------------ queue */
@@ -238,23 +258,38 @@ static void read_boot_counter(void)
     nvs_close(h);
 }
 
+/* Installed into mp_cfg: every change becomes a system.config audit event. */
+static void cfg_audit(const char *key, const char *oldv, const char *newv,
+                      const char *src)
+{
+    mp_evt_t e;
+    mp_evt_begin(&e, NULL, "system", "config");
+    mp_evt_str(&e, "key", key);
+    mp_evt_str(&e, "old", oldv);
+    mp_evt_str(&e, "new", newv);
+    mp_evt_str(&e, "src", src);
+    mp_evt_send(&e);
+}
+
 esp_err_t mp_log_init(void)
 {
     read_boot_counter();
 
+    mp_cfg_register(s_cfg_keys, sizeof(s_cfg_keys) / sizeof(s_cfg_keys[0]));
+    mp_cfg_set_audit_hook(cfg_audit);
+
+    char host[16];
+    mp_cfg_str("log.host", host, sizeof(host));
+
     memset(&s_dest, 0, sizeof(s_dest));
     s_dest.sin_family = AF_INET;
-    s_dest.sin_port = htons(CONFIG_MICROPOT_LOG_PORT);
-    if (inet_pton(AF_INET, CONFIG_MICROPOT_LOG_HOST, &s_dest.sin_addr) != 1) {
-        ESP_LOGE(TAG, "invalid log host '%s'", CONFIG_MICROPOT_LOG_HOST);
+    s_dest.sin_port = htons((uint16_t)mp_cfg_u32("log.port", CONFIG_MICROPOT_LOG_PORT));
+    if (inet_pton(AF_INET, host, &s_dest.sin_addr) != 1) {
+        ESP_LOGE(TAG, "invalid log host '%s'", host);
         return ESP_ERR_INVALID_ARG;
     }
 
-#if CONFIG_MICROPOT_LOG_PROTO_TCP
-    s_use_tcp = true;
-#else
-    s_use_tcp = false;
-#endif
+    s_use_tcp = mp_cfg_bool("log.tcp", MP_CFG_DEFAULT_TCP);
     /* Socket is opened lazily on first send: the lwIP/tcpip stack must already
      * be initialised (esp_netif_init) before any socket() call. */
 
@@ -274,8 +309,8 @@ esp_err_t mp_log_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "logger ready -> %s:%d over %s (boot #%u)",
-             CONFIG_MICROPOT_LOG_HOST, CONFIG_MICROPOT_LOG_PORT,
+    ESP_LOGI(TAG, "logger ready -> %s:%u over %s (boot #%u)",
+             host, (unsigned)mp_cfg_u32("log.port", CONFIG_MICROPOT_LOG_PORT),
              s_use_tcp ? "TCP" : "UDP", (unsigned)s_boot);
     return ESP_OK;
 }
