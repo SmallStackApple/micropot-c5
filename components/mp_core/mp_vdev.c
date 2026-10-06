@@ -62,11 +62,12 @@ esp_err_t mp_vdev_load(void)
             continue;
         }
         if (!p->wire) {
-            /* only packet-crafting engines can serve an address lwIP does
-             * not own; an lwIP-backend persona cannot live on an alias */
-            ESP_LOGW(TAG, "vdev%d: persona '%s' has no wire profile, slot skipped",
+            /* only a packet-crafting engine can serve an address lwIP does
+             * not own: aliases of wire-less personas ride the default
+             * backend (s419 when any linux419 persona is present) */
+            ESP_LOGW(TAG, "vdev%d: persona '%s' has no wire profile; "
+                     "default engine carries it (L3/L4 = that profile)",
                      i, pid);
-            continue;
         }
         ip4_addr_t a;
         if (ip4addr_aton(ip, &a) != 1) {

@@ -116,6 +116,17 @@ static void wire_init(void)
             mp_xport_use(wp->xport); /* primary persona's engine = default */
         }
     }
+
+    /* Aliases can only be served by a packet-crafting engine. If no persona
+     * pulled one in but the table has aliases, bring linux419 up as the
+     * default backend. */
+    if (mp_vdev_count() > 1 && n_inited == 0) {
+        const mp_wprof_t *wp = mp_wprof_find("linux419");
+        if (wp) {
+            ESP_ERROR_CHECK(wp->init(wp->params));
+            mp_xport_use(wp->xport);
+        }
+    }
 }
 
 #if CONFIG_MICROPOT_LINK_PROBES

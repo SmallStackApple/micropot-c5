@@ -525,6 +525,13 @@ esp_err_t mp_ctl_start(void)
     }
     ESP_ERROR_CHECK(mp_vdev_add(mgmt.addr, NULL));
 
+    /* the mgmt listeners ride the stack419 engine whatever the primary
+     * persona is — bring it up explicitly (init is idempotent) */
+    const mp_wprof_t *wp = mp_wprof_find("linux419");
+    if (wp) {
+        ESP_ERROR_CHECK(wp->init(wp->params));
+    }
+
     char psk[MP_CFG_STR_MAX + 1];
     mp_cfg_str("ctl.psk", psk, sizeof(psk));
     if (strcmp(psk, "change-me") == 0) {
