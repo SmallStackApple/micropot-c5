@@ -140,6 +140,7 @@ bool s419_established(s419_tcb *tcb)
     a->sess.dst_port = tcb->lport;
     a->sess.start_us = esp_timer_get_time();
     a->sess.id = mp_session_next_id();
+    a->sess.persona = lst->persona;
 
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "%s-%u", lst->name,
@@ -165,7 +166,8 @@ bool s419_established(s419_tcb *tcb)
 
 static esp_err_t s419_listen(const mp_listener_cfg_t *cfg)
 {
-    return s419_listener_add(cfg->port, cfg->name, cfg->handler, cfg->arg);
+    return s419_listener_add(cfg->port, cfg->name, cfg->persona,
+                             cfg->handler, cfg->arg);
 }
 
 const mp_xport_backend_t mp_xport_s419 = {

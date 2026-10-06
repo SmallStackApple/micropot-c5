@@ -213,6 +213,7 @@ static esp_err_t telnet_start(mp_service_t *svc)
     s_listener.vaddr = svc->bind.vaddr;
     s_listener.port = svc->bind.port;
     s_listener.name = "telnet";
+    s_listener.persona = svc->persona ? svc->persona->id : NULL;
     s_listener.handler = telnet_conn;
     s_listener.arg = svc;
     return mp_xport_listen(&s_listener);

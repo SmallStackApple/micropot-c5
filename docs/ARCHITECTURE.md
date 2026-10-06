@@ -96,9 +96,11 @@ and wraps the `mp_evt_t` payload:
 ```
 
 `sid` correlates the connect/login/command/disconnect events of one attacker
-session. In phase 1 the `persona` field is global; phase 2 moves it into the
-session (see [`ROADMAP.md`](ROADMAP.md)). Event names and notable `data`
-fields are listed in the top-level README.
+session. `persona` comes from the session (stamped by the transport from the
+listener config); system events fall back to the global value set by
+`mp_log_set_persona()`. Phase 1 has one persona so the value is uniform; phase
+2 gives each virtual IP its own (see [`ROADMAP.md`](ROADMAP.md)). Event names
+and notable `data` fields are listed in the top-level README.
 
 ## Boot sequence (`main/micropot_main.c`)
 

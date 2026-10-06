@@ -415,6 +415,7 @@ static esp_err_t ftpd_start(mp_service_t *svc)
     s_listener.vaddr = svc->bind.vaddr;
     s_listener.port = svc->bind.port;
     s_listener.name = "ftpd";
+    s_listener.persona = svc->persona ? svc->persona->id : NULL;
     s_listener.handler = ftpd_conn;
     s_listener.arg = svc;
     return mp_xport_listen(&s_listener);

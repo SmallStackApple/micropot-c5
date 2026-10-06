@@ -45,8 +45,9 @@ typedef enum {
 } s419_state_t;
 
 typedef struct {
-    uint16_t          port; /* host byte order */
+    uint16_t          port;    /* host byte order */
     const char       *name;
+    const char       *persona; /* persona id stamped on sessions, or NULL */
     mp_conn_handler_t handler;
     void             *arg;
 } s419_listener_t;
@@ -125,6 +126,7 @@ s419_tcb *s419_tcb_find(uint32_t lip, uint32_t rip,
 s419_tcb *s419_tcbs(void);                    /* list head, tcpip thread only */
 const s419_listener_t *s419_listener_find(uint16_t port);
 esp_err_t s419_listener_add(uint16_t port, const char *name,
+                            const char *persona,
                             mp_conn_handler_t handler, void *arg);
 int64_t   s419_now_ms(void);
 void      s419_report_overload(const s419_listener_t *lst);

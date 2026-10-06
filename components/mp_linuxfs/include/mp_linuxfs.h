@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "esp_err.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -50,6 +52,21 @@ bool mpfs_normalize(const char *cwd, const char *arg, char *out, size_t len);
 
 /** Basename after the last '/'; "/" itself yields "/". */
 const char *mpfs_basename(const char *path);
+
+/* -------------------------------------------------------- writable overlay
+ * The static brand tree above is read-only and always trusted. Phase 2 adds
+ * a writable overlay (attacker uploads / persistence simulation) on top:
+ * mpfs_lookup()/mpfs_children() consult it first, then the static tree.
+ *
+ * Phase 1 ships the interface only, so services can be written against it
+ * now; the calls return ESP_ERR_NOT_SUPPORTED. The phase-2 implementation
+ * will mount the reserved `storage` partition with LittleFS (a `littlefs`
+ * managed component) inside mpfs_overlay_init(), and back write/remove with
+ * it. Keep the overlay host-testable by isolating any ESP calls here.
+ */
+esp_err_t mpfs_overlay_init(void);
+esp_err_t mpfs_write(const char *path, const void *data, size_t len);
+esp_err_t mpfs_remove(const char *path);
 
 #ifdef __cplusplus
 }

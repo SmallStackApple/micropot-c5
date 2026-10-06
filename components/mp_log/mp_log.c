@@ -141,7 +141,8 @@ static void transport_send(const char *buf, size_t len)
 
 /* --------------------------------------------------------------- encoding */
 
-static int format_msg(const mp_evt_t *m, uint32_t seq, char *out, size_t n)
+static int format_msg(const mp_evt_t *m, uint32_t seq, const char *persona,
+                      char *out, size_t n)
 {
     char sip[16], dip[16];
     mp_ip4_str(m->src_ip, sip, sizeof(sip));
@@ -153,14 +154,17 @@ static int format_msg(const mp_evt_t *m, uint32_t seq, char *out, size_t n)
                     "\"sip\":\"%s\",\"sport\":%u,\"dip\":\"%s\",\"dport\":%u,"
                     "\"data\":{%s}}",
                     (long long)m->ts_ms, (unsigned)s_boot, (unsigned)seq,
-                    (unsigned)m->sid, m->evt, m->proto, s_persona,
+                    (unsigned)m->sid, m->evt, m->proto, persona,
                     sip, (unsigned)m->src_port, dip, (unsigned)m->dst_port,
                     m->data);
 }
 
 static void ship(const mp_evt_t *m, uint32_t seq, char *line, size_t line_cap)
 {
-    int n = format_msg(m, seq, line, line_cap);
+    /* Per-session persona (phase 2 multi-IP) wins; otherwise the global one
+     * set by mp_log_set_persona() for system events. */
+    int n = format_msg(m, seq, m->persona ? m->persona : s_persona,
+                       line, line_cap);
     if (n < 0 || (size_t)n + 1 >= line_cap) {
         return; /* cannot happen with MP_LOG_LINE_MAX >> MP_EVT_DATA_MAX */
     }

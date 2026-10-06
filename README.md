@@ -242,8 +242,9 @@ the v4.19 kernel sources (`~/linux`, tag `v4.19`):
 **Fake filesystem** (`linux419_fs.c`): distro-neutral tree — `/etc/passwd`,
 `/etc/shadow` (root-readable hashes), `/etc/ssh/sshd_config`, `/proc/*`,
 `/var/log/auth.log` with plausible brute-force traces, `/root/.bash_history`.
-The reserved SPIFFS partition stays free for a phase-2 writable overlay
-(attacker uploads, persistence).
+The reserved `storage` partition stays free for a phase-2 writable overlay
+(attacker uploads, persistence), to be mounted with LittleFS behind the
+`mpfs_overlay_*` interface.
 
 ### Validation (real pentest tools, from the LAN)
 
@@ -298,6 +299,8 @@ python3 tools/golden_check.py logs/baseline/micropot-*.jsonl \
 - The persona clock is a fixed base plus uptime (HTTP `Date`, shell `date`):
   the box simply looks like its RTC drifted.
 - The fake filesystem is read-only; uploads/uploads-via-shell are faked
-  (phase 2: SPIFFS writable overlay). FTP PASV uses a fixed 4-port pool
-  (40021–40024) instead of kernel ephemeral ports.
-- Single global log persona: phase 2 moves persona into each event's session.
+  (phase 2: LittleFS writable overlay via `mpfs_overlay_*`). FTP PASV uses a
+  fixed 4-port pool (40021–40024) instead of kernel ephemeral ports.
+- Phase 1 runs one persona, so every event carries the same `persona`; the
+  per-session persona plumbing (`mp_session_t.persona` → `mp_evt_t`) is
+  already in place for phase 2's per-virtual-IP devices.

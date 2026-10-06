@@ -8,6 +8,7 @@ static void test_basic_fields(void)
     mp_session_t s = {
         .id = 42, .src_ip = 0x0102A8C0, .src_port = 5000,
         .dst_ip = 0x6401A8C0, .dst_port = 23,
+        .persona = "ipcam-01",
     };
     mp_evt_t e;
     mp_evt_begin(&e, &s, "telnet", "telnet.login_attempt");
@@ -24,6 +25,7 @@ static void test_basic_fields(void)
     CHECK(e.src_port == 5000 && e.dst_port == 23);
     CHECK(strcmp(e.proto, "telnet") == 0);
     CHECK(strcmp(e.evt, "telnet.login_attempt") == 0);
+    CHECK(e.persona && strcmp(e.persona, "ipcam-01") == 0);
     CHECK(!e.truncated);
 }
 
@@ -45,6 +47,7 @@ static void test_no_session(void)
     mp_evt_begin(&e, NULL, "system", "net.up");
     mp_evt_str(&e, "ip", "192.168.1.100");
     CHECK(e.sid == 0 && e.src_ip == 0 && e.dst_port == 0);
+    CHECK(e.persona == NULL); /* system events fall back to the global one */
     CHECK_STR(e.data, "\"ip\":\"192.168.1.100\"");
 }
 

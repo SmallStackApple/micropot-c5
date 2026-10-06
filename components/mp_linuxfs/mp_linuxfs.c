@@ -110,3 +110,26 @@ const char *mpfs_basename(const char *path)
     const char *slash = strrchr(path, '/');
     return slash ? slash + 1 : path;
 }
+
+/* -------------------------------------------------------- writable overlay
+ * Phase-1 stubs. The interface is fixed so services can adopt it now; the
+ * phase-2 LittleFS-backed overlay fills these in (see mp_linuxfs.h and
+ * docs/ROADMAP.md). */
+esp_err_t mpfs_overlay_init(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t mpfs_write(const char *path, const void *data, size_t len)
+{
+    (void)path;
+    (void)data;
+    (void)len;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t mpfs_remove(const char *path)
+{
+    (void)path;
+    return ESP_ERR_NOT_SUPPORTED;
+}

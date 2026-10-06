@@ -54,9 +54,31 @@ static const mp_persona_t s_personas[] = {
 #define MP_ACTIVE_PERSONA_INDEX 0
 #endif
 
+/* Runtime override set by phase-2 config loading; NULL = Kconfig choice. */
+static const mp_persona_t *s_active_override;
+
+void mp_persona_set_active(const mp_persona_t *persona)
+{
+    s_active_override = persona;
+}
+
 const mp_persona_t *mp_persona_active(void)
 {
-    return &s_personas[MP_ACTIVE_PERSONA_INDEX];
+    return s_active_override ? s_active_override
+                             : &s_personas[MP_ACTIVE_PERSONA_INDEX];
+}
+
+const mp_persona_t *mp_persona_by_vaddr(uint32_t vaddr)
+{
+    if (vaddr == 0) {
+        return NULL; /* 0 == "any": not a per-IP persona (phase 1 default) */
+    }
+    for (size_t i = 0; i < sizeof(s_personas) / sizeof(s_personas[0]); i++) {
+        if (s_personas[i].bind.vaddr == vaddr) {
+            return &s_personas[i];
+        }
+    }
+    return NULL;
 }
 
 const mp_persona_t *mp_persona_by_index(size_t index)

@@ -172,6 +172,7 @@ static void accept_loop(void *arg)
         a->sess.src_port = ntohs(peer.sin_port);
         a->sess.start_us = esp_timer_get_time();
         a->sess.id = mp_session_next_id();
+        a->sess.persona = cfg->persona;
 
         struct sockaddr_in local;
         socklen_t local_len = sizeof(local);

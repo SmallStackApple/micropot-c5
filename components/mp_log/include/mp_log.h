@@ -33,6 +33,7 @@ typedef struct {
     uint16_t src_port;
     uint32_t dst_ip;
     uint16_t dst_port;
+    const char *persona; /* session persona id, or NULL for the global one */
     char     proto[12];
     char     evt[28];
     /* builder state for the "data" object (without braces) */

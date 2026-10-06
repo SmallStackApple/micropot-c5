@@ -65,6 +65,7 @@ void mp_evt_begin(mp_evt_t *e, const mp_session_t *s,
         e->src_port = s->src_port;
         e->dst_ip   = s->dst_ip;
         e->dst_port = s->dst_port;
+        e->persona  = s->persona;
     }
     copy_str(e->proto, proto, sizeof(e->proto));
     copy_str(e->evt, evt, sizeof(e->evt));

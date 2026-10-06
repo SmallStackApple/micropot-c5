@@ -223,6 +223,7 @@ const s419_listener_t *s419_listener_find(uint16_t port)
 }
 
 esp_err_t s419_listener_add(uint16_t port, const char *name,
+                            const char *persona,
                             mp_conn_handler_t handler, void *arg)
 {
     if (s_n_listeners >= S419_MAX_LISTENERS) {
@@ -234,6 +235,7 @@ esp_err_t s419_listener_add(uint16_t port, const char *name,
     s419_listener_t *l = &s_listeners[s_n_listeners++];
     l->port = port;
     l->name = name;
+    l->persona = persona;
     l->handler = handler;
     l->arg = arg;
     ESP_LOGI(TAG, "%s listening on port %u (stack419)", name, port);

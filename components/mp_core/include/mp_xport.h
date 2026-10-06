@@ -66,9 +66,10 @@ static inline void mp_conn_shutdown(mp_conn_t *c)
 typedef void (*mp_conn_handler_t)(mp_conn_t *conn, const mp_session_t *sess, void *arg);
 
 typedef struct {
-    uint32_t          vaddr; /* network byte order; 0 = any */
-    uint16_t          port;  /* host byte order */
-    const char       *name;  /* used for task naming / logs */
+    uint32_t          vaddr;   /* network byte order; 0 = any */
+    uint16_t          port;    /* host byte order */
+    const char       *name;    /* used for task naming / logs */
+    const char       *persona; /* persona id stamped on the session, or NULL */
     mp_conn_handler_t handler;
     void             *arg;
 } mp_listener_cfg_t;

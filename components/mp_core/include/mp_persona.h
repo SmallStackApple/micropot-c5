@@ -29,8 +29,22 @@ typedef struct {
     const char *transport;            /* xport backend: NULL/"lwip" or "s419" */
 } mp_persona_t;
 
-/** Currently selected persona (chosen by Kconfig). */
+/** Currently selected persona (chosen by Kconfig, or a runtime override). */
 const mp_persona_t *mp_persona_active(void);
+
+/**
+ * Override the active persona at runtime (NULL clears the override and
+ * restores the Kconfig default). Phase 2 uses this to select a persona
+ * from NVS/JSON instead of the compile-time choice.
+ */
+void mp_persona_set_active(const mp_persona_t *persona);
+
+/**
+ * Persona bound to a virtual IPv4 address (network byte order), or NULL.
+ * Phase 1 leaves every @c bind.vaddr zero (the single device IP); phase 2
+ * assigns one address per persona and indexes the table with this.
+ */
+const mp_persona_t *mp_persona_by_vaddr(uint32_t vaddr);
 
 const mp_persona_t *mp_persona_by_index(size_t index);
 size_t              mp_persona_count(void);

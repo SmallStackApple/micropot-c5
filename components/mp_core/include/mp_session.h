@@ -20,6 +20,13 @@ typedef struct {
     uint16_t dst_port;   /* local port, host byte order */
     uint32_t id;         /* monotonic session id */
     int64_t  start_us;   /* esp_timer_get_time() at accept */
+    /**
+     * Persona id this session belongs to, or NULL. Phase 1 sets one persona
+     * for the whole device (so this matches mp_log's global persona); phase
+     * 2 lets each virtual IP own a persona, and events carry theirs.
+     * Points at a static string with session lifetime.
+     */
+    const char *persona;
 } mp_session_t;
 
 #ifdef __cplusplus
