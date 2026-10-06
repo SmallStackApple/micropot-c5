@@ -7,6 +7,9 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+
+#include "esp_spiffs.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -135,27 +138,137 @@ static esp_err_t transport_open(void)
     return ESP_OK;
 }
 
-static void transport_send(const char *buf, size_t len)
+static bool transport_send(const char *buf, size_t len)
 {
     if (s_sock < 0) {
         transport_open();
         if (s_sock < 0) {
-            return;
+            return false;
         }
     }
     if (!s_use_tcp) {
-        sendto(s_sock, buf, len, 0, (struct sockaddr *)&s_dest, sizeof(s_dest));
-        return;
+        return sendto(s_sock, buf, len, 0, (struct sockaddr *)&s_dest,
+                      sizeof(s_dest)) >= 0;
     }
     if (!s_tcp_connected) {
         if (!tcp_connect(s_sock, &s_dest)) {
-            return;
+            return false;
         }
         s_tcp_connected = true;
     }
     if (send(s_sock, buf, len, 0) < 0) {
         ESP_LOGW(TAG, "TCP send failed errno=%d, reconnecting", errno);
         transport_close();
+        return false;
+    }
+    return true;
+}
+
+/* -------------------------------------------------------- SPIFFS ring spill
+ *
+ * When the transport is down (TCP disconnected, WiFi gone, local socket
+ * errors) events append to a two-slot ring in the "storage" partition;
+ * when sends succeed again the logger drains oldest-first, tagging each
+ * replayed line with "replay":true. UDP caveat: a silently-dead collector
+ * is indistinguishable from delivery — full spillover guarantees need
+ * log.tcp=true.
+ *
+ * Slot A is the current write file; on overflow it becomes B and a fresh A
+ * starts (B is dropped). The logger task is the only writer and reader.
+ */
+#define MP_LOG_RING_A          "/spiffs/logring.a"
+#define MP_LOG_RING_B          "/spiffs/logring.b"
+#define MP_LOG_RING_SLOT_BYTES (128 * 1024)
+#define MP_LOG_RING_DRAIN_MAX  16 /* lines drained per shipped event */
+
+static bool  s_ring_mounted;
+static FILE *s_ring_w;
+static FILE *s_ring_r;
+
+static void ring_mount(void)
+{
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = "storage",
+        .max_files = 5,
+        .format_if_mount_failed = false,
+    };
+    if (esp_vfs_spiffs_register(&conf) != ESP_OK) {
+        ESP_LOGW(TAG, "spiffs mount failed; ring spillover disabled");
+        return;
+    }
+    /* a stale A from a previous boot becomes the drain slot */
+    if (access(MP_LOG_RING_A, F_OK) == 0 && access(MP_LOG_RING_B, F_OK) != 0) {
+        rename(MP_LOG_RING_A, MP_LOG_RING_B);
+    }
+    s_ring_mounted = true;
+}
+
+static void ring_write(const char *line)
+{
+    if (!s_ring_mounted) {
+        return;
+    }
+    if (!s_ring_w) {
+        s_ring_w = fopen(MP_LOG_RING_A, "a");
+        if (!s_ring_w) {
+            return;
+        }
+    }
+    fputs(line, s_ring_w);
+    fflush(s_ring_w); /* power-loss friendliness beats metadata churn here */
+    if (ftell(s_ring_w) >= MP_LOG_RING_SLOT_BYTES) {
+        fclose(s_ring_w);
+        s_ring_w = NULL;
+        if (s_ring_r) { /* rotation discards the undrained remainder of B */
+            fclose(s_ring_r);
+            s_ring_r = NULL;
+        }
+        remove(MP_LOG_RING_B);
+        rename(MP_LOG_RING_A, MP_LOG_RING_B);
+    }
+}
+
+/* Send up to MP_LOG_RING_DRAIN_MAX backlog lines; stops at the first
+ * transport failure, keeping the read position for the next round. */
+static void ring_drain(void)
+{
+    if (!s_ring_mounted) {
+        return;
+    }
+    if (!s_ring_r) {
+        if (access(MP_LOG_RING_B, F_OK) != 0) {
+            return;
+        }
+        s_ring_r = fopen(MP_LOG_RING_B, "r");
+        if (!s_ring_r) {
+            return;
+        }
+    }
+    char line[MP_LOG_LINE_MAX];
+    for (int i = 0; i < MP_LOG_RING_DRAIN_MAX; i++) {
+        if (!fgets(line, sizeof(line), s_ring_r)) {
+            fclose(s_ring_r);
+            s_ring_r = NULL;
+            remove(MP_LOG_RING_B);
+            /* promote whatever accumulated in A while draining */
+            if (s_ring_w) {
+                fclose(s_ring_w);
+                s_ring_w = NULL;
+            }
+            rename(MP_LOG_RING_A, MP_LOG_RING_B);
+            return;
+        }
+        /* tag replays: insert right after the opening '{' */
+        char tagged[MP_LOG_LINE_MAX + 16];
+        if (line[0] == '{') {
+            snprintf(tagged, sizeof(tagged), "{\"replay\":true,%s", line + 1);
+        } else {
+            snprintf(tagged, sizeof(tagged), "%s", line);
+        }
+        if (!transport_send(tagged, strlen(tagged))) {
+            return;
+        }
     }
 }
 
@@ -190,7 +303,11 @@ static void ship(const mp_evt_t *m, uint32_t seq, char *line, size_t line_cap)
     }
     line[n++] = '\n'; /* newline framing so TCP receivers can split */
     line[n] = '\0';
-    transport_send(line, (size_t)n);
+    if (transport_send(line, (size_t)n)) {
+        ring_drain(); /* transport healthy: opportunistically flush backlog */
+    } else {
+        ring_write(line);
+    }
     if (mp_cfg_bool("log.console", MP_CFG_DEFAULT_CONSOLE)) {
         /* Blocking UART write: fine while developing, but under an event
          * flood it keeps this task (and thus the idle task) busy — see the
@@ -274,6 +391,7 @@ static void cfg_audit(const char *key, const char *oldv, const char *newv,
 esp_err_t mp_log_init(void)
 {
     read_boot_counter();
+    ring_mount();
 
     mp_cfg_register(s_cfg_keys, sizeof(s_cfg_keys) / sizeof(s_cfg_keys[0]));
     mp_cfg_set_audit_hook(cfg_audit);
