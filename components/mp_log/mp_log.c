@@ -160,6 +160,15 @@ static bool transport_send(const char *buf, size_t len)
         return true;
     }
     if (!s_tcp_connected) {
+        /* A socket whose nonblocking connect failed is in an unspecified
+         * state (POSIX); lwIP refuses any further connect() on it. Rebuild
+         * the socket for every reconnect attempt or the retry loop never
+         * recovers once the collector comes back. */
+        transport_close();
+        s_sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (s_sock < 0) {
+            return false;
+        }
         if (!tcp_connect(s_sock, &s_dest)) {
             return false;
         }
