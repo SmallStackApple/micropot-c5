@@ -76,6 +76,7 @@ void s419_tcp_new_syn(const s419_listener_t *lst,
 
     s419_tcb *tcb = s419_tcb_alloc();
     if (!tcb) {
+        s419_report_synflood(); /* TCB table / memory full: drop the SYN */
         return;
     }
     tcb->lip = lip;
@@ -136,7 +137,7 @@ static void process_ack(s419_tcb *tcb, uint32_t ack)
     if (tcb->fin_sent && tcb->fin_acked) {
         data_acked = acked ? acked - 1 : 0; /* FIN occupies one sequence */
     }
-    if (data_acked) {
+    if (data_acked && tcb->txbuf) { /* txbuf is NULL only with tx_len == 0 */
         portENTER_CRITICAL(&tcb->lock);
         if (data_acked > tcb->tx_len) {
             data_acked = tcb->tx_len;
@@ -191,6 +192,10 @@ static void enter_timewait(s419_tcb *tcb)
 {
     tcb->state = S419_S_TIME_WAIT;
     tcb->state_due_ms = s419_now_ms() + s419_par->timewait_ms;
+    /* A TIME_WAIT TCB only needs its 4-tuple and timers: drop the rings so
+     * a flood of closed connections cannot pin off PSRAM. */
+    s419_tcb_free_rx(tcb);
+    s419_tcb_free_tx(tcb);
 }
 
 void s419_tcp_input(s419_tcb *tcb, const uint8_t *th, size_t tcp_len,
@@ -294,17 +299,22 @@ void s419_tcp_input(s419_tcb *tcb, const uint8_t *th, size_t tcp_len,
 
     if (payload_len) {
         if (seg_seq == tcb->rcv_nxt && !tcb->peer_fin) {
-            /* in-order: buffer what fits, ACK what we took */
-            portENTER_CRITICAL(&tcb->lock);
-            uint32_t space = S419_RX_CAP - tcb->rx_len;
-            uint32_t take = payload_len < space ? payload_len : space;
-            if (take) {
-                memcpy(tcb->rxbuf + tcb->rx_len, th + doff, take);
-                tcb->rx_len += (uint16_t)take;
+            /* in-order: buffer what fits, ACK what we took. With the app
+             * detached the rx ring is freed, so discard but keep the
+             * sequence space moving (the peer still gets its ACK). */
+            uint32_t take = payload_len;
+            if (tcb->rxbuf) {
+                portENTER_CRITICAL(&tcb->lock);
+                uint32_t space = S419_RX_CAP - tcb->rx_len;
+                take = payload_len < space ? payload_len : space;
+                if (take) {
+                    memcpy(tcb->rxbuf + tcb->rx_len, th + doff, take);
+                    tcb->rx_len += (uint16_t)take;
+                }
+                portEXIT_CRITICAL(&tcb->lock);
             }
-            portEXIT_CRITICAL(&tcb->lock);
             tcb->rcv_nxt += take;
-            if (tcb->rx_sem) {
+            if (tcb->rx_sem && tcb->rxbuf) {
                 xSemaphoreGive(tcb->rx_sem);
             }
             /* delayed ACK: every 2nd full segment at once, else 40 ms

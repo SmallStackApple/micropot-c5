@@ -28,6 +28,13 @@
 #define S419_SYNRECV_CAP   32
 #define S419_MAX_PKT       1600
 
+/* Hard ceiling on live TCBs across all states (SYN_RECV, established,
+ * FIN_WAIT_2, TIME_WAIT). Without it, a connection-churn flood accumulates
+ * one small TCB per closed connection for the whole 60 s TIME_WAIT and can
+ * exhaust the internal heap; with it, excess SYNs are dropped exactly like
+ * an overloaded Linux host. */
+#define S419_MAX_TCBS      96
+
 /** lwIP ephemeral port floor (TCP/UDP_LOCAL_PORT_RANGE_START = 0xC000).
  *  Inbound traffic to these ports belongs to lwIP's own outbound flows
  *  (log collector) and must pass through untouched. */
@@ -121,6 +128,12 @@ void      s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo);
 s419_tcb *s419_tcb_alloc(void);
 void      s419_tcb_link(s419_tcb *tcb);
 void      s419_tcb_unlink_free(s419_tcb *tcb);
+
+/* Release the app-facing rings early (tcpip thread, app side detached):
+ * rx once nobody will read again, tx once every byte is acked. A lingering
+ * TIME_WAIT TCB then costs bytes, not the 20 KiB of rings. */
+void      s419_tcb_free_rx(s419_tcb *tcb);
+void      s419_tcb_free_tx(s419_tcb *tcb);
 s419_tcb *s419_tcb_find(uint32_t lip, uint32_t rip,
                         uint16_t lport, uint16_t rport);
 s419_tcb *s419_tcbs(void);                    /* list head, tcpip thread only */

@@ -275,6 +275,13 @@ void s419_tcp_flush(s419_tcb *tcb)
         tcb->rto_armed = true;
         tcb->rto_due_ms = now + tcb->rto_ms;
     }
+
+    /* All data (and the FIN, if any) is acked and the app is gone: the tx
+     * ring is dead weight through FIN_WAIT_2 / TIME_WAIT. */
+    if (!tcb->app_attached && tcb->txbuf && tcb->tx_len == 0 &&
+        tcb->snd_una == tcb->snd_nxt) {
+        s419_tcb_free_tx(tcb);
+    }
 }
 
 void s419_tcp_flush_msg(void *ctx)
@@ -299,6 +306,8 @@ void s419_tcp_close_msg(void *ctx)
         s419_tcb_unlink_free(tcb);
         return;
     }
+    /* the app will never read again: drop its receive buffer now */
+    s419_tcb_free_rx(tcb);
     s419_tcp_flush(tcb);
 }
 

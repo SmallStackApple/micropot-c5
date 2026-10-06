@@ -166,19 +166,19 @@ static void stats_task(void *arg)
         uint32_t tick_delta = tick - s_prev_tick; /* ~3000/round when alive */
         s_prev_tick = tick;
 #if CONFIG_MICROPOT_LINK_PROBES
-        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u rssi %d rx_age %llds gwping %dms gwarp %d tick +%lu",
+        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u tcbs %u rssi %d rx_age %llds gwping %dms gwarp %d tick +%lu",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                 (unsigned)mp_xport_active(), rssi,
+                 (unsigned)mp_xport_active(), (unsigned)mp_s419_tcb_count(), rssi,
                  (long long)(rx_age < 0 ? -1 : rx_age / 1000), s_gw_rtt_ms,
                  s_gw_arp, (unsigned long)tick_delta);
 #else
-        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u rssi %d rx_age %llds tick +%lu",
+        ESP_LOGI(TAG, "stats: heap %u (min %u) psram %u sessions %u tcbs %u rssi %d rx_age %llds tick +%lu",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                 (unsigned)mp_xport_active(), rssi,
+                 (unsigned)mp_xport_active(), (unsigned)mp_s419_tcb_count(), rssi,
                  (long long)(rx_age < 0 ? -1 : rx_age / 1000),
                  (unsigned long)tick_delta);
 #endif

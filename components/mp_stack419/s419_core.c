@@ -47,9 +47,11 @@ static s419_listener_t s_listeners[S419_MAX_LISTENERS];
 static size_t          s_n_listeners;
 
 static s419_tcb       *s_tcbs;
+static uint16_t        s_tcb_count;       /* live TCBs, capped by S419_MAX_TCBS */
 static uint16_t        s_synrecv_count;
 static uint16_t        s_icmp_id;
 static int64_t         s_last_flood_evt_ms;
+static int64_t         s_last_tx_warn_ms; /* raw_sendto warning throttle */
 static int64_t         s_last_rx_ms = -1; /* any inbound IPv4, diagnostics */
 static volatile uint32_t s_tick_count;    /* tcpip-thread heartbeat */
 
@@ -61,6 +63,11 @@ int64_t mp_s419_rx_age_ms(void)
 uint32_t mp_s419_tick_count(void)
 {
     return s_tick_count;
+}
+
+uint16_t mp_s419_tcb_count(void)
+{
+    return s_tcb_count;
 }
 
 /* raw-PCB callback contract: returning 1 (RAW_INPUT_EATEN) transfers pbuf
@@ -110,7 +117,14 @@ void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo)
     ip_addr_set_ip4_u32(dstp, dst_nbo);
     err_t err = raw_sendto(s_pcb_tx, p, dstp); /* HDRINCL: sent verbatim */
     if (err != ERR_OK) {
-        ESP_LOGW(TAG, "tx: raw_sendto -> %d", err);
+        /* Under a flood this fires on every packet (ERR_MEM when the lwIP
+         * pools are drained); logging each one over UART makes the overload
+         * worse, so keep it visible but rate-limited. */
+        int64_t now = s419_now_ms();
+        if (now - s_last_tx_warn_ms >= 2000) {
+            s_last_tx_warn_ms = now;
+            ESP_LOGW(TAG, "tx: raw_sendto -> %d (throttled)", err);
+        }
     }
     pbuf_free(p);
 }
@@ -140,6 +154,9 @@ void s419_report_synflood(void)
 
 s419_tcb *s419_tcb_alloc(void)
 {
+    if (s_tcb_count >= S419_MAX_TCBS) {
+        return NULL; /* overloaded: drop the SYN, like a full SYN queue */
+    }
     s419_tcb *tcb = calloc(1, sizeof(*tcb));
     if (!tcb) {
         return NULL;
@@ -163,6 +180,7 @@ s419_tcb *s419_tcb_alloc(void)
         return NULL;
     }
     tcb->lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
+    s_tcb_count++;
     return tcb;
 }
 
@@ -188,9 +206,29 @@ void s419_tcb_unlink_free(s419_tcb *tcb)
     if (tcb->tx_sem) {
         vSemaphoreDelete(tcb->tx_sem);
     }
-    heap_caps_free(tcb->rxbuf);
-    heap_caps_free(tcb->txbuf);
+    s419_tcb_free_rx(tcb);
+    s419_tcb_free_tx(tcb);
     free(tcb);
+    if (s_tcb_count) {
+        s_tcb_count--;
+    }
+}
+
+/* Early ring release (tcpip thread). The app side is detached by the time
+ * either is called, so rx has no reader and tx holds no unsent/unacked
+ * data; a TCB kept only for TIME_WAIT then costs bytes instead of 20 KiB. */
+void s419_tcb_free_rx(s419_tcb *tcb)
+{
+    heap_caps_free(tcb->rxbuf);
+    tcb->rxbuf = NULL;
+    tcb->rx_len = 0;
+}
+
+void s419_tcb_free_tx(s419_tcb *tcb)
+{
+    heap_caps_free(tcb->txbuf);
+    tcb->txbuf = NULL;
+    tcb->tx_len = 0;
 }
 
 s419_tcb *s419_tcb_find(uint32_t lip, uint32_t rip,

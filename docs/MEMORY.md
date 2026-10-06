@@ -40,7 +40,7 @@ idf.py size
 | accept-loop task stack | 4 KB × listener | **PSRAM** | lwIP backend |
 | UDP listener task stack | 4 KB × listener | **PSRAM** | phase-2 UDP services |
 | event queue | 24 × `sizeof(mp_evt_t)` ≈ 11 KB | **PSRAM** | `xQueueCreateWithCaps`, bounded drop-on-full |
-| s419 RX/TX rings | 4 KB + 16 KB per TCB | **PSRAM** (fallback HP) | `s419_tcb_alloc()` |
+| s419 RX/TX rings | 4 KB + 16 KB per TCB | **PSRAM** (fallback HP) | allocated at SYN, freed early — see below |
 | wolfSSH KEX + channel | several KiB per in-flight KEX | **PSRAM for ≥2 KB**, else HP | `XMALLOC_USER` override, see below |
 | logger task stack | 6 KB | HP SRAM | does NVS + sockets, deliberately internal |
 
@@ -59,6 +59,16 @@ idf.py size
   called from `sshd_start()` to keep the object in the link.
 - **The internal reserve** `CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768`
   keeps `malloc()` from starving the WiFi/lwIP internal pool.
+- **s419 TCB rings are released early, not at TIME_WAIT expiry.** A closed
+  connection used to keep its 20 KB rings in PSRAM for the full 60 s
+  `TIME_WAIT`/`FIN_WAIT_2`, so connection-churn floods (e.g. `ab` without
+  keep-alive) pinned off PSRAM and then made `raw_sendto()` fail with
+  `ERR_MEM`. Now `s419_tcb_free_rx()` drops the rx ring when the app
+  detaches and `s419_tcb_free_tx()` drops the tx ring once every byte is
+  acked, so a lingering TCB costs bytes. A hard cap (`S419_MAX_TCBS = 96`,
+  all states) bounds the TCB table; excess SYNs are dropped like a full
+  Linux SYN queue. `stats:` reports `tcbs` alongside `sessions`/`psram` so
+  a pinned TCB count is visible.
 - **Session budget.** With HP SRAM free `F` bytes after static usage and a
   per-session cost `c` (stacks + buffers), the safe budget is roughly
   `min(CONFIG_MICROPOT_MAX_SESSIONS, F / c)`. Keep headroom for a burst of
