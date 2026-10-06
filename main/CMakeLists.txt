@@ -17,5 +17,6 @@ idf_component_register(
         mp_brand_printer
         mp_brand_linux419
         mp_stack419
+        mp_ctl
         nvs_flash
 )

@@ -111,10 +111,27 @@ const mp_vdev_t *mp_vdev_by_vaddr(uint32_t vaddr)
     return NULL;
 }
 
+esp_err_t mp_vdev_add(uint32_t vaddr, const mp_persona_t *persona)
+{
+    if (mp_vdev_by_vaddr(vaddr)) {
+        return ESP_OK;
+    }
+    if (s_n >= MP_VDEV_MAX) {
+        return ESP_ERR_NO_MEM;
+    }
+    s_vdevs[s_n].vaddr = vaddr;
+    s_vdevs[s_n].persona = persona;
+    s_n++;
+    return ESP_OK;
+}
+
 bool mp_vdev_vendor_coherent(const char **vendor_a, const char **vendor_b)
 {
     const char *first = NULL;
     for (size_t i = 0; i < s_n; i++) {
+        if (!s_vdevs[i].persona) {
+            continue; /* management plane: no narrative */
+        }
         const mp_brand_t *b = mp_brand_find(s_vdevs[i].persona->brand_id);
         const char *v = (b && b->meta) ? b->meta->vendor : NULL;
         if (!v) {

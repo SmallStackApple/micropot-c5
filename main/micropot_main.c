@@ -26,6 +26,7 @@
 #include "mp_brand_printer.h"
 #include "mp_brand_router.h"
 #include "mp_cfg_esp.h"
+#include "mp_ctl.h"
 #include "mp_ftpd.h"
 #include "mp_http_ui.h"
 #include "mp_apache.h"
@@ -230,6 +231,7 @@ void app_main(void)
     /* Runtime config layer: opens the "mpc" NVS namespace; must precede any
      * component that registers keys or reads overrides (mp_log is first). */
     ESP_ERROR_CHECK(mp_cfg_init());
+    mp_ctl_init(); /* registers mgmt/ctl config keys */
 
     /* Persona/brand/vdev data is pure data, so resolve it before bringing
      * up the radio: the primary brand's OUI and persona hostname are applied
@@ -289,6 +291,10 @@ void app_main(void)
         fatal_restart("service start failed");
     }
     log_started_services();
+
+    /* Management plane on its own dedicated address (no-op when mgmt.ip
+     * is unset). */
+    mp_ctl_start();
 
     /* vdev inventory + narrative coherence: distinct brand vendors on one
      * shared MAC read as "one box with aliases" — warn, don't forbid. */

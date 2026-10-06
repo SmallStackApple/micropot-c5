@@ -70,6 +70,9 @@ typedef struct {
     uint16_t          port;    /* host byte order */
     const char       *name;    /* used for task naming / logs */
     const char       *persona; /* persona id stamped on the session, or NULL */
+    /* NULL or an ACL over the peer address (network byte order); false
+     * means the connection is refused before any service sees it */
+    bool             (*allow)(uint32_t src_ip);
     mp_conn_handler_t handler;
     void             *arg;
     const struct mp_xport_backend *xport; /* NULL = active default backend */

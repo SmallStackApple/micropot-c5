@@ -323,6 +323,21 @@ void mp_log_set_persona(const char *persona_id)
     snprintf(s_persona, sizeof(s_persona), "%s", persona_id);
 }
 
+void mp_log_stats(uint32_t *dropped, uint32_t *queued)
+{
+    if (dropped) {
+        *dropped = s_dropped;
+    }
+    if (queued) {
+        *queued = s_queue ? uxQueueMessagesWaiting(s_queue) : 0;
+    }
+}
+
+uint32_t mp_log_boot_count(void)
+{
+    return s_boot;
+}
+
 /* ----------------------------------------------------- phase-1 wrappers */
 
 void mp_log_net_up(const char *ip, const char *gw, const char *mac)

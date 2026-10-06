@@ -23,16 +23,19 @@ extern "C" {
  * (stack419) can serve addresses lwIP does not own.
  * ---------------------------------------------------------------------- */
 
-#define MP_VDEV_MAX 8
+#define MP_VDEV_MAX 9 /* primary + mgmt + 7 persona aliases */
 
 typedef struct {
     uint32_t              vaddr;   /* lwIP convention (first octet low); 0 = primary */
-    const mp_persona_t   *persona;
+    const mp_persona_t   *persona; /* NULL = management plane (no services) */
 } mp_vdev_t;
 
 /** Build the vdev table: primary persona + alias entries from mp_cfg.
  *  Call after mp_cfg_init and brand/persona registration. */
 esp_err_t mp_vdev_load(void);
+
+/** Add the management plane address (persona NULL). Idempotent. */
+esp_err_t mp_vdev_add(uint32_t vaddr, const mp_persona_t *persona);
 
 size_t          mp_vdev_count(void);
 const mp_vdev_t *mp_vdev_at(size_t i);

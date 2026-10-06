@@ -56,9 +56,18 @@ typedef struct {
     uint16_t          port;    /* host byte order */
     const char       *name;
     const char       *persona; /* persona id stamped on sessions, or NULL */
+    /* NULL or an ACL over the peer address (lwIP word); false = silently
+     * drop the SYN, the port reads as filtered (iptables DROP realism) */
+    bool             (*allow)(uint32_t src_ip);
     mp_conn_handler_t handler;
     void             *arg;
 } s419_listener_t;
+
+/* UDP listeners (management plane). Handler runs in the tcpip thread —
+ * copy what you need and defer; engine-domain (big-endian) addresses. */
+typedef void (*s419_udp_handler_t)(uint32_t lip, uint32_t rip,
+                                   uint16_t lport, uint16_t rport,
+                                   const uint8_t *data, size_t len);
 
 typedef struct s419_tcb {
     struct s419_tcb *next;
@@ -141,7 +150,16 @@ s419_tcb *s419_tcbs(void);                    /* list head, tcpip thread only */
 const s419_listener_t *s419_listener_find(uint32_t vaddr, uint16_t port);
 esp_err_t s419_listener_add(uint32_t vaddr, uint16_t port, const char *name,
                             const char *persona,
+                            bool (*allow)(uint32_t src_ip),
                             mp_conn_handler_t handler, void *arg);
+esp_err_t s419_udp_listen(uint32_t vaddr, uint16_t port,
+                          bool (*allow)(uint32_t src_ip),
+                          s419_udp_handler_t fn);
+/* Reply path for UDP listeners; callable from any task (precedent: the
+ * app-task TCP flush path does the same via s419_output). */
+void      s419_udp_send(uint32_t lip, uint32_t rip,
+                        uint16_t lport, uint16_t rport,
+                        const void *data, size_t len);
 int64_t   s419_now_ms(void);
 void      s419_report_overload(const s419_listener_t *lst);
 void      s419_report_synflood(void);

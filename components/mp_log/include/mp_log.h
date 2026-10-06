@@ -61,6 +61,11 @@ esp_err_t mp_log_init(void);
 /** Set the persona id embedded in every subsequent event. */
 void mp_log_set_persona(const char *persona_id);
 
+/** Dropped (queue overflow) and currently-queued event counts. */
+void     mp_log_stats(uint32_t *dropped, uint32_t *queued);
+/** NVS boot counter value for this boot. */
+uint32_t mp_log_boot_count(void);
+
 /* ----------------------------------------------------- phase-1 wrappers */
 
 void mp_log_net_up(const char *ip, const char *gw, const char *mac);

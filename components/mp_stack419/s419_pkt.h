@@ -86,3 +86,14 @@ size_t s419_build_icmp_unreach(uint8_t *out, const uint8_t *bad,
                                size_t bad_len, uint16_t ipid,
                                uint32_t src_nbo, uint32_t dst_nbo,
                                const mp_s419_params_t *par);
+
+/**
+ * UDP datagram (management plane replies). DF off and counter IPID like
+ * plain Linux UDP output; checksum always computed (RFC 768 with the
+ * all-ones zero rule).
+ * @return full packet length.
+ */
+size_t s419_build_udp(uint8_t *out, const uint8_t *data, size_t data_len,
+                      uint16_t ipid, uint32_t src_nbo, uint32_t dst_nbo,
+                      uint16_t sport, uint16_t dport,
+                      const mp_s419_params_t *par);

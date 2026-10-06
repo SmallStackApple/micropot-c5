@@ -139,6 +139,15 @@ static void accept_loop(void *arg)
             continue;
         }
 
+        /* ACL (management plane): refuse before any service sees it. lwIP
+         * cannot RST a specific peer pre-accept, so accept+close is the
+         * closest available behavior; stack419-based listeners get the
+         * proper silent-drop treatment in the engine. */
+        if (cfg->allow && !cfg->allow(peer.sin_addr.s_addr)) {
+            close(sock);
+            continue;
+        }
+
         /* Over budget: accept then drop at once so the backlog drains and
          * the scanner sees an open-but-helpless port, not a RST storm. */
         if (!mp_xport_budget_take()) {

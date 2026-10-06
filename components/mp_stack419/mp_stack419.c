@@ -55,6 +55,19 @@ static esp_err_t wprof_init_thunk(const void *params)
     return mp_stack419_init((const mp_s419_params_t *)params);
 }
 
+esp_err_t mp_s419_udp_listen(uint32_t vaddr, uint16_t port,
+                             bool (*allow)(uint32_t src_ip_lwip),
+                             mp_s419_udp_handler_t fn)
+{
+    return s419_udp_listen(vaddr, port, allow, fn);
+}
+
+void mp_s419_udp_send(uint32_t lip, uint32_t rip, uint16_t lport,
+                      uint16_t rport, const void *data, size_t len)
+{
+    s419_udp_send(lip, rip, lport, rport, data, len);
+}
+
 const mp_wprof_t mp_wprof_linux419 = {
     .id = "linux419",
     .init = wprof_init_thunk,

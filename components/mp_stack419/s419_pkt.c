@@ -11,6 +11,7 @@
 
 #define IP_PROTO_ICMP 1
 #define IP_PROTO_TCP  6
+#define IP_PROTO_UDP  17
 
 static void put16(uint8_t *p, uint16_t v)
 {
@@ -236,4 +237,50 @@ size_t s419_build_icmp_unreach(uint8_t *out, const uint8_t *bad,
     s419_put_ip(out, (uint16_t)(S419_IP_HLEN + 8 + quote), ipid, par->icmp_df,
                 par->ttl, IP_PROTO_ICMP, src_nbo, dst_nbo);
     return S419_IP_HLEN + 8 + quote;
+}
+
+static uint16_t udp_cksum(const uint8_t *ip, const uint8_t *uh, size_t udp_len)
+{
+    /* pseudo header: src, dst, zero+proto, udp length */
+    uint32_t sum = 0;
+    const uint8_t *p;
+    size_t len;
+
+    for (p = ip + 12, len = 8; len > 1; p += 2, len -= 2) {
+        sum += (uint16_t)((p[0] << 8) | p[1]);
+    }
+    sum += IP_PROTO_UDP;
+    sum += (uint16_t)udp_len;
+
+    for (p = uh, len = udp_len; len > 1; p += 2, len -= 2) {
+        sum += (uint16_t)((p[0] << 8) | p[1]);
+    }
+    if (len) {
+        sum += (uint16_t)(p[0] << 8);
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    uint16_t r = (uint16_t)~sum;
+    return r ? r : 0xffff; /* RFC 768: a computed zero checksum is all-ones */
+}
+
+size_t s419_build_udp(uint8_t *out, const uint8_t *data, size_t data_len,
+                      uint16_t ipid, uint32_t src_nbo, uint32_t dst_nbo,
+                      uint16_t sport, uint16_t dport,
+                      const mp_s419_params_t *par)
+{
+    uint8_t *uh = out + S419_IP_HLEN;
+    size_t udp_len = 8 + data_len;
+    put16(uh + 0, sport);
+    put16(uh + 2, dport);
+    put16(uh + 4, (uint16_t)udp_len);
+    put16(uh + 6, 0);
+    memcpy(uh + 8, data, data_len);
+
+    /* DF off, counter IPID: plain Linux UDP output (ip_finish_output). */
+    s419_put_ip(out, (uint16_t)(S419_IP_HLEN + udp_len), ipid, false,
+                par->ttl, IP_PROTO_UDP, src_nbo, dst_nbo);
+    put16(uh + 6, udp_cksum(out, uh, udp_len));
+    return S419_IP_HLEN + udp_len;
 }

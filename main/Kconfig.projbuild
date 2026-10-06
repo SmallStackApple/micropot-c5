@@ -140,6 +140,29 @@ menu "MicroPot-C5 honeypot"
             default ""
     endmenu
 
+    menu "Management plane"
+        config MICROPOT_MGMT_IP
+            string "Management vdev IPv4 (0.0.0.0 = disabled)"
+            default "0.0.0.0"
+            help
+                Dedicated alias address for the control channel; never part
+                of a honeypot persona. Non-admin sources see every port on
+                it closed (the control port: filtered).
+
+        config MICROPOT_CTL_PORT
+            int "Control channel port (UDP+TCP)"
+            range 1 65535
+            default 55555
+
+        config MICROPOT_CTL_PSK
+            string "Control channel PSK (HMAC-SHA256 key)"
+            default "change-me"
+
+        config MICROPOT_CTL_ADMIN
+            string "Admin source IPv4 ACL (0.0.0.0 = any, PSK-only)"
+            default "0.0.0.0"
+    endmenu
+
     menu "Structured logging"
         choice MICROPOT_LOG_PROTO
             prompt "Log transport"

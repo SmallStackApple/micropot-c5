@@ -100,6 +100,20 @@ uint16_t s419_icmp_ipid(void)
     return ++s_icmp_id; /* incrementing: nmap II=I */
 }
 
+/* UDP replies for engine-level listeners (management plane). The buffer is
+ * shared scratch — the mp_ctl task is the only producer. */
+void s419_udp_send(uint32_t lip, uint32_t rip, uint16_t lport, uint16_t rport,
+                   const void *data, size_t len)
+{
+    static uint8_t pkt[1400];
+    if (len > sizeof(pkt) - S419_IP_HLEN - 8) {
+        len = sizeof(pkt) - S419_IP_HLEN - 8; /* truncated reply beats none */
+    }
+    size_t n = s419_build_udp(pkt, data, len, s419_icmp_ipid(),
+                              lip, rip, lport, rport, s419_par);
+    s419_output(pkt, n, rip);
+}
+
 /* ---------------------------------------------------------------- output */
 
 void s419_output(const uint8_t *pkt, size_t len, uint32_t dst_nbo)
@@ -259,6 +273,54 @@ s419_tcb *s419_tcbs(void)
 
 /* ------------------------------------------------------------- listeners */
 
+#define S419_MAX_UDP_LISTENERS 4
+
+typedef struct {
+    uint32_t vaddr; /* lwIP word; 0 = wildcard */
+    uint16_t port;
+    bool (*allow)(uint32_t src_ip);
+    s419_udp_handler_t handler;
+} s419_udp_listener_t;
+
+static s419_udp_listener_t s_udp_listeners[S419_MAX_UDP_LISTENERS];
+static size_t              s_n_udp_listeners;
+
+static const s419_udp_listener_t *s419_udp_listener_find(uint32_t vaddr,
+                                                         uint16_t port)
+{
+    const s419_udp_listener_t *wild = NULL;
+    for (size_t i = 0; i < s_n_udp_listeners; i++) {
+        if (s_udp_listeners[i].port != port) {
+            continue;
+        }
+        if (s_udp_listeners[i].vaddr == vaddr) {
+            return &s_udp_listeners[i];
+        }
+        if (s_udp_listeners[i].vaddr == 0) {
+            wild = &s_udp_listeners[i];
+        }
+    }
+    return wild;
+}
+
+esp_err_t s419_udp_listen(uint32_t vaddr, uint16_t port,
+                          bool (*allow)(uint32_t src_ip),
+                          s419_udp_handler_t fn)
+{
+    if (s_n_udp_listeners >= S419_MAX_UDP_LISTENERS) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (s419_udp_listener_find(vaddr, port)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s419_udp_listener_t *l = &s_udp_listeners[s_n_udp_listeners++];
+    l->vaddr = vaddr;
+    l->port = port;
+    l->allow = allow;
+    l->handler = fn;
+    return ESP_OK;
+}
+
 /* Exact vaddr match wins over the wildcard (vaddr 0 = primary), so two
  * personas can share a port on different virtual devices. */
 const s419_listener_t *s419_listener_find(uint32_t vaddr, uint16_t port)
@@ -280,6 +342,7 @@ const s419_listener_t *s419_listener_find(uint32_t vaddr, uint16_t port)
 
 esp_err_t s419_listener_add(uint32_t vaddr, uint16_t port, const char *name,
                             const char *persona,
+                            bool (*allow)(uint32_t src_ip),
                             mp_conn_handler_t handler, void *arg)
 {
     if (s_n_listeners >= S419_MAX_LISTENERS) {
@@ -293,6 +356,7 @@ esp_err_t s419_listener_add(uint32_t vaddr, uint16_t port, const char *name,
     l->port = port;
     l->name = name;
     l->persona = persona;
+    l->allow = allow;
     l->handler = handler;
     l->arg = arg;
     ESP_LOGI(TAG, "%s listening on vaddr 0x%08lx port %u (stack419)", name,
@@ -365,6 +429,9 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
             /* discard */
         } else if (flags & S419_SYN) {
             if (!(flags & S419_FIN)) {
+                if (lst->allow && !lst->allow(PP_HTONL(ip_src))) {
+                    return eat(p); /* ACL: filtered, silently dropped */
+                }
                 /* No per-packet logging here: this runs in the tcpip thread
                  * and a blocking UART write per SYN starves the idle task
                  * (task watchdog) under a flood. Connection attempts show
@@ -400,6 +467,19 @@ static u8_t on_udp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     uint16_t dport = s419_rd16(uh + 2);
     if (dport >= S419_EPHEMERAL_MIN || dport == UDP_PORT_DHCP_CLIENT) {
         return 0; /* lwIP traffic (DNS/NTP/DHCP client) */
+    }
+    /* UDP listeners (management plane): ACL failure = filtered, silent. */
+    const s419_udp_listener_t *ul = s419_udp_listener_find(PP_HTONL(ip_dst), dport);
+    if (ul) {
+        if (ul->allow && !ul->allow(PP_HTONL(s419_rd32(ip + 12)))) {
+            return eat(p);
+        }
+        size_t udp_len = s419_rd16(uh + 4);
+        if (udp_len >= 8 && ihl + udp_len <= p->tot_len) {
+            ul->handler(ip_dst, s419_rd32(ip + 12), dport,
+                        s419_rd16(uh + 0), uh + 8, udp_len - 8);
+        }
+        return eat(p);
     }
     /* UDP to a closed port: ICMP port unreachable (nmap U1 test). The
      * buffer must fit the fully-quoted offending packet (up to 576). */

@@ -41,6 +41,24 @@ uint16_t mp_s419_tcb_count(void);
 /** The xport backend that routes listeners/connections through the engine. */
 extern const mp_xport_backend_t mp_xport_s419;
 
+/* ---- engine-level UDP listeners (management plane) -------------------- */
+
+/** Datagram handler, invoked in the tcpip thread: copy what is needed and
+ *  defer real work to a task. Addresses are engine-domain (big-endian
+ *  numerics); convert with PP_HTONL for the lwIP convention. */
+typedef void (*mp_s419_udp_handler_t)(uint32_t lip, uint32_t rip,
+                                      uint16_t lport, uint16_t rport,
+                                      const uint8_t *data, size_t len);
+
+/** Register a UDP listener; vaddr is lwIP word order (0 = wildcard). */
+esp_err_t mp_s419_udp_listen(uint32_t vaddr, uint16_t port,
+                             bool (*allow)(uint32_t src_ip_lwip),
+                             mp_s419_udp_handler_t fn);
+
+/** Send a UDP datagram; callable from any task. */
+void mp_s419_udp_send(uint32_t lip, uint32_t rip, uint16_t lport,
+                      uint16_t rport, const void *data, size_t len);
+
 /** Wire profile bundling the generic nmap "Fingerprint Linux 4.19" params
  *  with this engine — registered into mp_wprof by the app. */
 extern const mp_wprof_t mp_wprof_linux419;

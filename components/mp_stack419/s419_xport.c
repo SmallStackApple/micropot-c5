@@ -166,7 +166,7 @@ bool s419_established(s419_tcb *tcb)
 static esp_err_t s419_listen(const mp_listener_cfg_t *cfg)
 {
     return s419_listener_add(cfg->vaddr, cfg->port, cfg->name, cfg->persona,
-                             cfg->handler, cfg->arg);
+                             cfg->allow, cfg->handler, cfg->arg);
 }
 
 const mp_xport_backend_t mp_xport_s419 = {
