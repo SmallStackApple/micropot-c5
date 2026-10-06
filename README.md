@@ -175,10 +175,54 @@ holds the attacker's own version string (scanner fingerprint);
 
 ## Configuration
 
-All knobs live under *MicroPot-C5 honeypot* in `menuconfig`
-(`main/Kconfig.projbuild`): WiFi, static IP, service ports, global session
-budget, active persona, log transport and destination. Build-time defaults are
-in `sdkconfig.defaults` (target esp32c5, 16 MB flash, Quad PSRAM @ 80 MHz).
+Two layers:
+
+- **Build time** (`menuconfig`, `main/Kconfig.projbuild`): WiFi defaults,
+  static IP, service-port defaults, session budget ceiling, primary persona,
+  vdev alias defaults, management-plane defaults, log transport defaults.
+  Build-time defaults are in `sdkconfig.defaults`.
+- **Runtime** (`mp_cfg`, NVS namespace `mpc`, overrides win over Kconfig):
+  managed remotely over the control channel or locally on the serial CLI.
+  Every change is validated, persisted, and audited (`system.config` event).
+  Keys marked `needs_reboot` (WiFi, ports, vdev table, mgmt address, log
+  transport) apply after the `reboot` command; the rest are live.
+
+| Live-immediate keys | Reboot-applied keys |
+|---|---|
+| `log.console`, `perf.int_s`, `perf.heap_kb` | `wifi.ssid`, `wifi.pass` |
+| `cred.root`, `cred.admin` (shadow re-hashes on change) | `port.telnet/http/ssh/ftp` |
+| `ctl.psk`, `ctl.admin` | `vdev1..7.ip/persona`, `mgmt.ip`, `ctl.port`, `log.host/port/tcp` |
+
+## Management plane
+
+The control service never shares a honeypot IP: it binds a **dedicated vdev
+address** (`mgmt.ip`, no persona attached) and answers only signed requests
+from `ctl.admin` (0.0.0.0 = PSK-only). To anyone else, that address is a
+Linux host with every port closed and the control port filtered.
+
+- **Channel**: UDP or TCP on `ctl.port` (default 55555), one request per
+  datagram/line:
+  `id=1 ts=1730000000 cmd=set k=log.port v=514 mac=<hmac-sha256>`
+  (HMAC key = `ctl.psk`, message = everything before ` mac=`, monotonic
+  `ts` per boot). JSON replies.
+- **Client**: `python3 tools/micropotctl.py --host <mgmt-ip> --psk ... status`
+  (`--tcp`, `--raw`; commands `ping status list get set unset reset
+  log.stats log.test reboot`).
+- **Serial CLI**: `micropot>` REPL on the UART with the same command set,
+  no HMAC — the rescue path when the network is misconfigured.
+- Default PSK `change-me` triggers a `system.config_warn` event at boot.
+
+## Multi virtual devices
+
+One station MAC, up to 8 virtual devices (IP aliasing — 802.11 cannot source
+a second MAC): the primary address plus alias vdevs and the management
+address. `mp_vif` answers ARP for aliases (netif input wrapper) and diverts
+alias-destined IP traffic into the wire engine via esp-lwip's
+`LWIP_HOOK_IP4_INPUT` before lwIP drops it as not-for-us. Listeners match
+(vaddr, port) with the wildcard bound to the primary. Persona (L7 identity)
+and wire profile (L3/L4 behaviour, `mp_wprof`) are separate axes a vdev
+binds freely; mixing brand vendors on one MAC logs a narrative-coherence
+warning at boot.
 
 ## L2 identity: MAC & DHCP hostname spoofing
 
@@ -193,7 +237,7 @@ hostname comes from `mp_persona_t.hostname` via `esp_netif_set_hostname()`.
 | `hikvision_ipcam` | `44:19:B6` | Hangzhou Hikvision | IPCAM-01 |
 | `tplink_router`   | `00:1D:0F` | TP-Link Technologies | TP-LINK_WR841N |
 | `hp_printer`      | `00:01:E6` | Hewlett Packard | HP-LaserJet-M428 |
-| `linux_419`       | `52:54:00` | QEMU/KVM virtual NIC | linux |
+| `linux_419`       | `00:E0:4C` | Realtek | linux |
 
 To advertise a different vendor, just edit the brand's `mac_oui` (the first
 byte must have bit 0 clear, i.e. an even first octet). Other examples:
@@ -279,33 +323,37 @@ python3 tools/golden_check.py logs/baseline/micropot-*.jsonl \
                               logs/candidate/micropot-*.jsonl --ignore sid
 ```
 
-## Extending (phase 2)
+## Extending
 
 - **New brand**: add `components/brands/mp_brand_xxx/` with a `behaviors[]`
   table (+ `www/` pages), add it to `main`'s `REQUIRES` and register it in
-  `select_brand()`.
+  `register_all()`.
 - **New protocol**: copy `components/mp_ssh_banner/` as the template — define a
   behaviour struct in the component's own header, interpret it from brand
   data, emit events via `mp_evt_*`, register in `main` with one line. Text
-  protocols should build on `mp_linekit`; UDP protocols on
-  `mp_udp_listener` (pseudo-sessions included). No core/header edits needed.
-- **Multi virtual IP**: services already carry `mp_bind_t{vaddr, port}` and
-  personas carry a `bind`; extend the persona table to one entry per IP.
+  protocols should build on `mp_linekit`. No core/header edits needed.
+- **New wire personality**: add a parameter block + `mp_wprof_t` next to the
+  engine (see `mp_wprof_linux419`) and register one line in `register_all()`;
+  personas bind it by id, per vdev.
+- **New config knob**: register an `mp_cfg_key_t` in the owning component;
+  it becomes reachable from mp_ctl and the serial CLI for free, with
+  validation, persistence, audit and an optional `on_change` hook.
 
 ### Known limitations
 
-- `esp_http_server` binds `INADDR_ANY`, so phase 2's multi-IP HTTP will need
-  one server instance per virtual IP (tracked as a design risk).
-- Telnet credentials are matched against a static weak-password table; the
-  honeypot never authenticates real users.
-- wolfSSH implements no chacha20-poly1305/umac/curve25519@libssh.org, so the
-  sshd KEXINIT is 7.9p1's lists minus those entries (indistinguishable from
-  a hardened sshd_config, but `ssh2-enum-algos` shows the trimmed lists).
+- All vdevs share one MAC (802.11 infrastructure constraint; IP aliasing is
+  the real-world look). Mixing brand vendors across vdevs is warned about at
+  boot (`system.config_warn`) but not forbidden.
+- Alias vdevs must use a packet-engine wire profile (stack419); lwIP-socket
+  services (`mp_http_ui`) only serve the primary address. The ftpd PASV pool
+  is shared and wildcard-bound.
+- Remote changes marked `needs_reboot` are stored but applied on restart —
+  the engines have no listener teardown, and a clean reboot beats a
+  half-rebound listener table.
 - The persona clock is a fixed base plus uptime (HTTP `Date`, shell `date`):
   the box simply looks like its RTC drifted.
 - The fake filesystem is read-only; uploads/uploads-via-shell are faked
-  (phase 2: LittleFS writable overlay via `mpfs_overlay_*`). FTP PASV uses a
-  fixed 4-port pool (40021–40024) instead of kernel ephemeral ports.
-- Phase 1 runs one persona, so every event carries the same `persona`; the
-  per-session persona plumbing (`mp_session_t.persona` → `mp_evt_t`) is
-  already in place for phase 2's per-virtual-IP devices.
+  (backlog: writable overlay). FTP PASV uses a fixed 4-port pool
+  (40021–40024) instead of kernel ephemeral ports.
+- UDP log transport cannot detect a silently dead collector; use
+  `log.tcp=true` when the SPIFFS ring spillover must guarantee coverage.
