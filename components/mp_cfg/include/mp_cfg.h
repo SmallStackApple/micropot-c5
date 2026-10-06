@@ -50,6 +50,8 @@ typedef struct {
     /* called after a successful set/unset (value already stored), e.g. to
      * regenerate derived state like /etc/shadow */
     void        (*on_change)(const char *key);
+    /* value only takes effect after a reboot (listener rebind, WiFi) */
+    bool          needs_reboot;
 } mp_cfg_key_t;
 
 /* Storage backend: return 1 value found, 0 not found, <0 error. */

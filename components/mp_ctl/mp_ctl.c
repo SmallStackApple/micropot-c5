@@ -48,10 +48,10 @@ static const char *TAG = "mp_ctl";
 /* ------------------------------------------------------------ config keys */
 
 static const mp_cfg_key_t s_cfg_keys[] = {
-    { "mgmt.ip",   MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_MGMT_IP }, 0, 0, NULL, false, NULL },
-    { "ctl.port",  MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_CTL_PORT }, 1, 65535, NULL, false, NULL },
-    { "ctl.psk",   MP_CFG_T_STR, { .u.str = CONFIG_MICROPOT_CTL_PSK }, 0, 0, NULL, true, NULL },
-    { "ctl.admin", MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_CTL_ADMIN }, 0, 0, NULL, false, NULL },
+    { "mgmt.ip",   MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_MGMT_IP }, 0, 0, NULL, false, NULL, true },
+    { "ctl.port",  MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_CTL_PORT }, 1, 65535, NULL, false, NULL, true },
+    { "ctl.psk",   MP_CFG_T_STR, { .u.str = CONFIG_MICROPOT_CTL_PSK }, 0, 0, NULL, true, NULL, false },
+    { "ctl.admin", MP_CFG_T_IP,  { .u.str = CONFIG_MICROPOT_CTL_ADMIN }, 0, 0, NULL, false, NULL, false },
 };
 
 static bool ctl_acl(uint32_t src_ip)
@@ -383,7 +383,8 @@ static int ctl_exec(const char *line, char *out, size_t cap, const char *src)
             err = (r == -2) ? "validation failed" : "storage error";
             goto reply;
         }
-        snprintf(result, sizeof(result), "\"ok\"");
+        snprintf(result, sizeof(result), "%s",
+                 def->needs_reboot ? "\"ok (applies after reboot)\"" : "\"ok\"");
     } else if (strcmp(cmd, "unset") == 0) {
         if (!def || mp_cfg_unset(k, src) != 0) {
             err = "unknown key";

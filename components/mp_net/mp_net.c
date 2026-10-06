@@ -10,6 +10,7 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "mp_cfg.h"
 #include "mp_net.h"
 #include "mp_util.h"
 
@@ -105,6 +106,13 @@ static esp_err_t apply_static_ip(void)
 
 esp_err_t mp_net_init(const uint8_t mac_oui[3], const char *hostname)
 {
+    /* runtime-overridable WiFi credentials (applied on the next boot) */
+    static const mp_cfg_key_t keys[] = {
+        { "wifi.ssid", MP_CFG_T_STR, { .u.str = CONFIG_MICROPOT_WIFI_SSID }, 0, 0, NULL, false, NULL, true },
+        { "wifi.pass", MP_CFG_T_STR, { .u.str = CONFIG_MICROPOT_WIFI_PASSWORD }, 0, 0, NULL, true, NULL, true },
+    };
+    mp_cfg_register(keys, sizeof(keys) / sizeof(keys[0]));
+
     s_wifi_eg = xEventGroupCreate();
     if (!s_wifi_eg) {
         return ESP_ERR_NO_MEM;
@@ -129,12 +137,16 @@ esp_err_t mp_net_init(const uint8_t mac_oui[3], const char *hostname)
         IP_EVENT, IP_EVENT_STA_GOT_IP, &on_ip, NULL, NULL));
 
     wifi_config_t wcfg = { 0 };
-    strlcpy((char *)wcfg.sta.ssid, CONFIG_MICROPOT_WIFI_SSID, sizeof(wcfg.sta.ssid));
-    strlcpy((char *)wcfg.sta.password, CONFIG_MICROPOT_WIFI_PASSWORD,
-            sizeof(wcfg.sta.password));
+    /* runtime-overridable; applied on the next boot */
+    char ssid[32], pass[64];
+    mp_cfg_str("wifi.ssid", ssid, sizeof(ssid));
+    mp_cfg_str("wifi.pass", pass, sizeof(pass));
+    strlcpy((char *)wcfg.sta.ssid, ssid, sizeof(wcfg.sta.ssid));
+    strlcpy((char *)wcfg.sta.password, pass, sizeof(wcfg.sta.password));
     wcfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_LOGI(TAG, "station started, joining '%s'", ssid);
 
     /* Vendor MAC spoofing: brand OUI + the unique tail of the factory MAC.
      * esp_wifi_set_mac() must be called while the interface is still disabled. */
@@ -184,8 +196,6 @@ esp_err_t mp_net_init(const uint8_t mac_oui[3], const char *hostname)
      * directions (AP-side buffering + wake cycles), which makes interactive
      * sessions stutter and can trip an attacker's timeouts. */
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-
-    ESP_LOGI(TAG, "station started, joining '%s'", CONFIG_MICROPOT_WIFI_SSID);
     return ESP_OK;
 }
 

@@ -55,8 +55,8 @@ static void on_cred_change(const char *key)
 }
 
 static const mp_cfg_key_t s_cred_keys[] = {
-    { "cred.root",  MP_CFG_T_STR, { .u.str = "" }, 0, 0, NULL, true, on_cred_change },
-    { "cred.admin", MP_CFG_T_STR, { .u.str = "" }, 0, 0, NULL, true, on_cred_change },
+    { "cred.root",  MP_CFG_T_STR, { .u.str = "" }, 0, 0, NULL, true, on_cred_change, false },
+    { "cred.admin", MP_CFG_T_STR, { .u.str = "" }, 0, 0, NULL, true, on_cred_change, false },
 };
 
 /* ------------------------------------------------------------- HTTP pages */

@@ -25,6 +25,7 @@
 #include "mp_brand_linux419.h"
 #include "mp_brand_printer.h"
 #include "mp_brand_router.h"
+#include "mp_cfg.h"
 #include "mp_cfg_esp.h"
 #include "mp_cli.h"
 #include "mp_ctl.h"
@@ -239,12 +240,21 @@ void app_main(void)
      * wire profile id per vdev — fully decoupled from brands. */
     wire_init();
 
-    mp_registry_register(mp_telnet_get_ops(), mp_bind_any(CONFIG_MICROPOT_TELNET_PORT));
-    mp_registry_register(mp_http_ui_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));
-    mp_registry_register(mp_apache_get_ops(), mp_bind_any(CONFIG_MICROPOT_HTTP_PORT));
-    mp_registry_register(mp_ssh_banner_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
-    mp_registry_register(mp_ssh_server_get_ops(), mp_bind_any(CONFIG_MICROPOT_SSH_PORT));
-    mp_registry_register(mp_ftpd_get_ops(), mp_bind_any(CONFIG_MICROPOT_FTP_PORT));
+    /* service ports: runtime-overridable, applied on the next boot */
+    static const mp_cfg_key_t port_keys[] = {
+        { "port.telnet", MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_TELNET_PORT }, 1, 65535, NULL, false, NULL, true },
+        { "port.http", MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_HTTP_PORT }, 1, 65535, NULL, false, NULL, true },
+        { "port.ssh", MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_SSH_PORT }, 1, 65535, NULL, false, NULL, true },
+        { "port.ftp", MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_FTP_PORT }, 1, 65535, NULL, false, NULL, true },
+    };
+    mp_cfg_register(port_keys, sizeof(port_keys) / sizeof(port_keys[0]));
+
+    mp_registry_register(mp_telnet_get_ops(), mp_bind_any(mp_cfg_u32("port.telnet", CONFIG_MICROPOT_TELNET_PORT)));
+    mp_registry_register(mp_http_ui_get_ops(), mp_bind_any(mp_cfg_u32("port.http", CONFIG_MICROPOT_HTTP_PORT)));
+    mp_registry_register(mp_apache_get_ops(), mp_bind_any(mp_cfg_u32("port.http", CONFIG_MICROPOT_HTTP_PORT)));
+    mp_registry_register(mp_ssh_banner_get_ops(), mp_bind_any(mp_cfg_u32("port.ssh", CONFIG_MICROPOT_SSH_PORT)));
+    mp_registry_register(mp_ssh_server_get_ops(), mp_bind_any(mp_cfg_u32("port.ssh", CONFIG_MICROPOT_SSH_PORT)));
+    mp_registry_register(mp_ftpd_get_ops(), mp_bind_any(mp_cfg_u32("port.ftp", CONFIG_MICROPOT_FTP_PORT)));
 
     char ip[16] = "0.0.0.0";
     char gw[16] = "0.0.0.0";
@@ -271,7 +281,6 @@ void app_main(void)
      * is unset) plus the serial CLI fallback. */
     mp_ctl_start();
     mp_cli_start();
-
     /* vdev inventory + narrative coherence: distinct brand vendors on one
      * shared MAC read as "one box with aliases" — warn, don't forbid. */
     const char *va, *vb;

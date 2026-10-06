@@ -103,10 +103,10 @@ static void audit_spy(const char *key, const char *oldv, const char *newv,
 /* ------------------------------------------------------------ key fixture */
 
 static const mp_cfg_key_t s_keys[] = {
-    { "log.host", MP_CFG_T_IP,  { .u.str = "192.168.1.10" }, 0, 0, NULL, false, NULL },
-    { "log.port", MP_CFG_T_U32, { .u.u32 = 9999 }, 1, 65535, NULL, false, NULL },
-    { "log.tcp",  MP_CFG_T_BOOL,{ .u.b = false }, 0, 0, NULL, false, NULL },
-    { "ctl.psk",  MP_CFG_T_STR, { .u.str = "change-me" }, 0, 0, NULL, true, NULL },
+    { "log.host", MP_CFG_T_IP,  { .u.str = "192.168.1.10" }, 0, 0, NULL, false, NULL, false },
+    { "log.port", MP_CFG_T_U32, { .u.u32 = 9999 }, 1, 65535, NULL, false, NULL, false },
+    { "log.tcp",  MP_CFG_T_BOOL,{ .u.b = false }, 0, 0, NULL, false, NULL, false },
+    { "ctl.psk",  MP_CFG_T_STR, { .u.str = "change-me" }, 0, 0, NULL, true, NULL, false },
 };
 
 static void reset_fixture(void)
@@ -236,19 +236,19 @@ static void test_registry_guards(void)
 {
     /* duplicate key rejected */
     static const mp_cfg_key_t dup[] = {
-        { "log.host", MP_CFG_T_STR, { .u.str = "x" }, 0, 0, NULL, false, NULL },
+        { "log.host", MP_CFG_T_STR, { .u.str = "x" }, 0, 0, NULL, false, NULL, false },
     };
     CHECK(mp_cfg_register(dup, 1) == -1);
 
     /* overlong key rejected (NVS limit) */
     static const mp_cfg_key_t longk[] = {
-        { "0123456789abcdef", MP_CFG_T_STR, { .u.str = "x" }, 0, 0, NULL, false, NULL },
+        { "0123456789abcdef", MP_CFG_T_STR, { .u.str = "x" }, 0, 0, NULL, false, NULL, false },
     };
     CHECK(mp_cfg_register(longk, 1) == -1);
 
     /* invalid default rejected */
     static const mp_cfg_key_t baddflt[] = {
-        { "bad.port", MP_CFG_T_U32, { .u.u32 = 70000 }, 1, 65535, NULL, false, NULL },
+        { "bad.port", MP_CFG_T_U32, { .u.u32 = 70000 }, 1, 65535, NULL, false, NULL, false },
     };
     CHECK(mp_cfg_register(baddflt, 1) == -1);
 

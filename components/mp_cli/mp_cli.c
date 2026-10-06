@@ -107,7 +107,7 @@ static int cmd_set(int argc, char **argv)
         printf("set failed (%d)\n", r);
         return 1;
     }
-    printf("ok\n");
+    printf("%s\n", def->needs_reboot ? "ok (applies after reboot)" : "ok");
     return 0;
 }
 

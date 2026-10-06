@@ -25,8 +25,8 @@
 static const char *TAG = "mp_perf";
 
 static const mp_cfg_key_t s_cfg_keys[] = {
-    { "perf.int_s", MP_CFG_T_U32, { .u.u32 = 60 }, 0, 3600, NULL, false, NULL },
-    { "perf.heap_kb", MP_CFG_T_U32, { .u.u32 = 32 }, 8, 512, NULL, false, NULL },
+    { "perf.int_s", MP_CFG_T_U32, { .u.u32 = 60 }, 0, 3600, NULL, false, NULL, false },
+    { "perf.heap_kb", MP_CFG_T_U32, { .u.u32 = 32 }, 8, 512, NULL, false, NULL, false },
 };
 
 static temperature_sensor_handle_t s_tsens;
