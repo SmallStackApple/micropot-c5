@@ -1,164 +1,33 @@
 /*
- * vsftpd-style FTP honeypot (3.0.3 protocol behaviour).
+ * vsftpd-style FTP honeypot (3.0.3 protocol behaviour) — control session.
  *
  * Reply texts and sequencing follow ~/vsftpd-3.0.3 (prelogin.c /
  * postlogin.c / features.c): 220 greeting, USER/PASS flow, FEAT list,
- * SYST, PWD/CWD over the persona's fake filesystem, PASV data channel
- * served through a small pool of pre-registered listeners, read-only
- * RETR/LIST and 550 for writes. Past max_clients control sessions the
- * server answers 421 like a saturated vsftpd (CVE-2021-30047's
- * connection-limit DoS signature, reproduced without the crash).
+ * SYST, PWD/CWD over the persona's fake filesystem, read-only RETR/LIST
+ * and 550 for writes. The PASV data channel and the connection limits
+ * (CVE-2021-30047's 421 signature) live in mp_ftpd_data.c.
  *
  * Events: ftp.login_attempt, ftp.command, ftp.download, ftp.disconnect.
  */
 #include <stdio.h>
 #include <string.h>
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-
 #include "esp_log.h"
 
 #include "mp_core.h"
 #include "mp_ftpd.h"
 #include "mp_ftpd_behavior.h"
+#include "mp_ftpd_internal.h"
 #include "mp_linekit.h"
 #include "mp_log.h"
 
 static const char *TAG = "mp_ftpd";
 
-#define CTRL_TIMEOUT_MS  300000 /* vsftpd idle_session_timeout default */
-#define PASV_SLOTS       4
-#define PASV_PORT_BASE   40021
-#define PASV_WAIT_MS     60000
-#define FTP_LINE_MAX     512
+#define FTP_LINE_MAX 512
 
-/* --------------------------------------------------------- PASV pool ---- */
-
-typedef struct {
-    SemaphoreHandle_t conn_ready; /* data task -> control: conn arrived */
-    SemaphoreHandle_t xfr_done;   /* control -> data task: release conn */
-    mp_conn_t *conn;
-    const mp_session_t *sess;
-    bool in_use;
-} pasv_slot_t;
-
-static pasv_slot_t s_pasv[PASV_SLOTS];
-static mp_listener_cfg_t s_pasv_listeners[PASV_SLOTS];
 static mp_listener_cfg_t s_listener;
-static uint8_t s_active; /* control sessions (421 past max_clients) */
-/* per-source-IP session counts (421 past max_per_ip); the table can never
- * outgrow the global session budget, so a fixed small array suffices */
-#define PERIP_SLOTS 8
-static struct { uint32_t ip; uint8_t n; } s_perip[PERIP_SLOTS];
-static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
-/* found: slot index; new IP with room: -(slot)-1; table full: -100
- * (only reachable if max_clients >= PERIP_SLOTS, which the brand
- * values below the session budget prevent) */
-static int perip_find(uint32_t ip)
-{
-    int empty = -1;
-    for (int i = 0; i < PERIP_SLOTS; i++) {
-        if (s_perip[i].n && s_perip[i].ip == ip) {
-            return i;
-        }
-        if (!s_perip[i].n && empty < 0) {
-            empty = i;
-        }
-    }
-    return empty >= 0 ? -1 - empty : -100;
-}
-
-/* Returns: 0 admit, 1 refuse (global), 2 refuse (per-ip). Caller holds
- * no lock; on 0 the counters are already claimed. */
-static int limit_admit(const mp_ftpd_behavior_t *b, uint32_t ip)
-{
-    int ret = 0;
-    portENTER_CRITICAL(&s_lock);
-    if (s_active >= b->max_clients) {
-        ret = 1; /* vsftpd checks max_clients first (prelogin.c) */
-    } else {
-        int i = perip_find(ip);
-        if (i >= 0 && s_perip[i].n >= b->max_per_ip) {
-            ret = 2;
-        } else {
-            if (i < 0 && i != -100) {
-                i = -i - 1;
-                s_perip[i].ip = ip;
-                s_perip[i].n = 0;
-            }
-            if (i >= 0) {
-                s_perip[i].n++;
-            }
-            s_active++;
-        }
-    }
-    portEXIT_CRITICAL(&s_lock);
-    return ret;
-}
-
-static void limit_release(uint32_t ip)
-{
-    portENTER_CRITICAL(&s_lock);
-    if (s_active) {
-        s_active--;
-    }
-    int i = perip_find(ip);
-    if (i >= 0 && s_perip[i].n) {
-        s_perip[i].n--;
-    }
-    portEXIT_CRITICAL(&s_lock);
-}
-
-static void pasv_data_task(mp_conn_t *conn, const mp_session_t *sess, void *arg)
-{
-    pasv_slot_t *slot = (pasv_slot_t *)arg;
-    slot->conn = conn;
-    slot->sess = sess;
-    xSemaphoreGive(slot->conn_ready);
-    /* the control task transfers over this conn; block until it is done
-     * so the backend does not release the connection under our feet */
-    xSemaphoreTake(slot->xfr_done, pdMS_TO_TICKS(CTRL_TIMEOUT_MS));
-    slot->conn = NULL;
-    slot->sess = NULL;
-}
-
-/** Claim a free PASV slot. @return slot index or -1. */
-static int pasv_claim(void)
-{
-    int idx = -1;
-    portENTER_CRITICAL(&s_lock);
-    for (int i = 0; i < PASV_SLOTS; i++) {
-        if (!s_pasv[i].in_use) {
-            s_pasv[i].in_use = true;
-            idx = i;
-            break;
-        }
-    }
-    portEXIT_CRITICAL(&s_lock);
-    return idx;
-}
-
-static void pasv_release(int idx)
-{
-    portENTER_CRITICAL(&s_lock);
-    s_pasv[idx].in_use = false;
-    portEXIT_CRITICAL(&s_lock);
-}
-
-/* --------------------------------------------------------- session ---- */
-
-typedef struct {
-    mp_conn_t *conn;
-    const mp_session_t *sess;
-    const mp_ftpd_behavior_t *b;
-    char cwd[128];
-    char user[64];
-    bool has_user;
-    bool authed;
-    int pasv; /* claimed slot index, -1 = none */
-} ftp_t;
+/* ------------------------------------------------------------ replies ---- */
 
 static int reply(ftp_t *f, int code, const char *msg)
 {
@@ -202,31 +71,6 @@ static void list_line(mp_conn_t *c, const mpfs_node_t *node, const char *name)
     mp_conn_send(c, buf, strlen(buf));
 }
 
-/* ------------------------------------------------------- data channel ---- */
-
-/** Wait for the peer's data connection on the claimed PASV slot.
- *  @return the data conn (owned by the slot) or NULL on timeout. */
-static mp_conn_t *pasv_accept(ftp_t *f)
-{
-    if (f->pasv < 0) {
-        return NULL;
-    }
-    pasv_slot_t *slot = &s_pasv[f->pasv];
-    if (xSemaphoreTake(slot->conn_ready, pdMS_TO_TICKS(PASV_WAIT_MS)) != pdTRUE) {
-        return NULL;
-    }
-    return slot->conn;
-}
-
-static void pasv_finish(ftp_t *f)
-{
-    if (f->pasv >= 0) {
-        xSemaphoreGive(s_pasv[f->pasv].xfr_done);
-        pasv_release(f->pasv);
-        f->pasv = -1;
-    }
-}
-
 /* ------------------------------------------------------------ commands ---- */
 
 static void cmd_user(ftp_t *f, const char *arg)
@@ -260,7 +104,7 @@ static void cmd_pass(ftp_t *f, const char *arg)
 static void cmd_pasv(ftp_t *f)
 {
     if (f->pasv < 0) {
-        f->pasv = pasv_claim();
+        f->pasv = mp_ftpd_pasv_claim();
     }
     if (f->pasv < 0) {
         reply(f, 421, "Service not available, try later.");
@@ -289,10 +133,10 @@ static void cmd_list(ftp_t *f, const char *arg, bool names_only)
         return;
     }
 
-    mp_conn_t *data = pasv_accept(f);
+    mp_conn_t *data = mp_ftpd_pasv_accept(f);
     if (!data) {
         reply(f, 425, "Failed to establish connection.");
-        pasv_finish(f);
+        mp_ftpd_pasv_finish(f);
         return;
     }
     reply(f, 150, "Here comes the directory listing.");
@@ -319,7 +163,7 @@ static void cmd_list(ftp_t *f, const char *arg, bool names_only)
     }
     mp_conn_shutdown(data);
     reply(f, 226, "Directory send OK.");
-    pasv_finish(f);
+    mp_ftpd_pasv_finish(f);
 }
 
 static void cmd_retr(ftp_t *f, const char *arg)
@@ -334,10 +178,10 @@ static void cmd_retr(ftp_t *f, const char *arg)
         reply(f, 550, "Failed to open file.");
         return;
     }
-    mp_conn_t *data = pasv_accept(f);
+    mp_conn_t *data = mp_ftpd_pasv_accept(f);
     if (!data) {
         reply(f, 425, "Failed to establish connection.");
-        pasv_finish(f);
+        mp_ftpd_pasv_finish(f);
         return;
     }
     uint32_t size = node->size ? node->size : (uint32_t)strlen(node->content);
@@ -356,7 +200,7 @@ static void cmd_retr(ftp_t *f, const char *arg)
     mp_evt_int(&e, "bytes", size);
     mp_evt_send(&e);
 
-    pasv_finish(f);
+    mp_ftpd_pasv_finish(f);
 }
 
 static void cmd_size(ftp_t *f, const char *arg)
@@ -401,15 +245,6 @@ static void cmd_pwd(ftp_t *f)
 }
 
 /* -------------------------------------------------------------- dispatch */
-
-/* commands allowed before login (vsftpd prelogin.c) */
-static bool prelogin_cmd(const char *cmd)
-{
-    return strcasecmp(cmd, "USER") == 0 || strcasecmp(cmd, "PASS") == 0 ||
-           strcasecmp(cmd, "QUIT") == 0 || strcasecmp(cmd, "FEAT") == 0 ||
-           strcasecmp(cmd, "SYST") == 0 || strcasecmp(cmd, "NOOP") == 0 ||
-           strcasecmp(cmd, "HELP") == 0;
-}
 
 /** @return false when the session should end. */
 static bool ftp_dispatch(ftp_t *f, char *line)
@@ -516,7 +351,7 @@ static void ftpd_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
 
     /* CVE-2021-30047: past the connection limits vsftpd answers 421
      * (prelogin.c check_limits, verbatim strings) */
-    switch (limit_admit(b, sess->src_ip)) {
+    switch (mp_ftpd_limit_admit(b, sess->src_ip)) {
     case 1:
         mp_send_str(conn, "421 There are too many connected users, "
                           "please try later.\r\n");
@@ -555,8 +390,8 @@ static void ftpd_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
             open = ftp_dispatch(&f, line);
         }
     }
-    pasv_finish(&f);
-    limit_release(sess->src_ip);
+    mp_ftpd_pasv_finish(&f);
+    mp_ftpd_limit_release(sess->src_ip);
 }
 
 /* ------------------------------------------------------------- lifecycle */
@@ -571,24 +406,9 @@ static esp_err_t ftpd_start(mp_service_t *svc)
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    /* pre-register the PASV pool (no unlisten API, slots are reused) */
-    for (int i = 0; i < PASV_SLOTS; i++) {
-        if (!s_pasv[i].conn_ready) {
-            s_pasv[i].conn_ready = xSemaphoreCreateBinary();
-            s_pasv[i].xfr_done = xSemaphoreCreateBinary();
-        }
-        memset(&s_pasv_listeners[i], 0, sizeof(s_pasv_listeners[i]));
-        s_pasv_listeners[i].vaddr = svc->bind.vaddr;
-        s_pasv_listeners[i].port = PASV_PORT_BASE + (uint16_t)i;
-        s_pasv_listeners[i].name = "ftpd-data";
-        s_pasv_listeners[i].handler = pasv_data_task;
-        s_pasv_listeners[i].arg = &s_pasv[i];
-        esp_err_t err = mp_xport_listen(&s_pasv_listeners[i]);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "pasv listener %u failed: %s",
-                     PASV_PORT_BASE + i, esp_err_to_name(err));
-            return err;
-        }
+    esp_err_t err = mp_ftpd_pasv_pool_start(svc->bind.vaddr);
+    if (err != ESP_OK) {
+        return err;
     }
 
     memset(&s_listener, 0, sizeof(s_listener));

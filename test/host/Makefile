@@ -11,7 +11,7 @@ ROOT    := ../..
 INC := -Istubs \
        -I$(ROOT)/components/mp_core/include \
        -I$(ROOT)/components/mp_log/include \
-       -I$(ROOT)/components/mp_http/include \
+       -I$(ROOT)/components/mp_http_ui/include \
        -I$(ROOT)/components/mp_linekit/include \
        -I$(ROOT)/components/mp_stack419/include \
        -I$(ROOT)/components/mp_stack419
@@ -23,8 +23,8 @@ all: run
 test_evt: test_evt.c $(ROOT)/components/mp_log/mp_evt.c test_util.h
 	$(CC) $(CFLAGS) $(INC) -o $@ $< $(ROOT)/components/mp_log/mp_evt.c
 
-test_form: test_form.c $(ROOT)/components/mp_http/mp_form.c test_util.h
-	$(CC) $(CFLAGS) $(INC) -o $@ $< $(ROOT)/components/mp_http/mp_form.c
+test_form: test_form.c $(ROOT)/components/mp_http_ui/mp_form.c test_util.h
+	$(CC) $(CFLAGS) $(INC) -o $@ $< $(ROOT)/components/mp_http_ui/mp_form.c
 
 test_linekit: test_linekit.c $(ROOT)/components/mp_linekit/mp_linekit.c test_util.h
 	$(CC) $(CFLAGS) $(INC) -o $@ $< $(ROOT)/components/mp_linekit/mp_linekit.c

@@ -6,6 +6,8 @@ idf_component_register(
         "s419_pkt.c"
         "s419_siphash.c"
         "s419_tcp.c"
+        "s419_tcp_in.c"
+        "s419_tcp_timer.c"
         "s419_xport.c"
     INCLUDE_DIRS "include"
     REQUIRES mp_core mp_net mp_log lwip esp_timer
