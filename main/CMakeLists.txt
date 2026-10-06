@@ -18,5 +18,6 @@ idf_component_register(
         mp_brand_linux419
         mp_stack419
         mp_ctl
+        mp_cli
         nvs_flash
 )

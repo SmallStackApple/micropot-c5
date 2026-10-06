@@ -26,6 +26,7 @@
 #include "mp_brand_printer.h"
 #include "mp_brand_router.h"
 #include "mp_cfg_esp.h"
+#include "mp_cli.h"
 #include "mp_ctl.h"
 #include "mp_ftpd.h"
 #include "mp_http_ui.h"
@@ -293,8 +294,9 @@ void app_main(void)
     log_started_services();
 
     /* Management plane on its own dedicated address (no-op when mgmt.ip
-     * is unset). */
+     * is unset) plus the serial CLI fallback. */
     mp_ctl_start();
+    mp_cli_start();
 
     /* vdev inventory + narrative coherence: distinct brand vendors on one
      * shared MAC read as "one box with aliases" — warn, don't forbid. */
