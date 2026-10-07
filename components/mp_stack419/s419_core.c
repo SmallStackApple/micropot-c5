@@ -516,12 +516,14 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     }
 
     const s419_listener_t *lst = s419_listener_find(PP_HTONL(ip_dst), lport);
-    if (!lst && lport >= S419_EPHEMERAL_MIN) {
+    if (!lst && lport >= S419_EPHEMERAL_MIN && ip_dst == s419_our_ip()) {
         s_dbg_guard_count++;
         s_dbg_guard_port = lport;
-        return 0; /* lwIP's own outbound flows (log collector) — checked
-                   * AFTER listeners so high-numbered service ports (the
-                   * mgmt plane sits at 55555) are not shadowed */
+        return 0; /* lwIP's own outbound flows (log collector) exist only
+                   * on the primary — checked AFTER listeners so high-
+                   * numbered service ports (the mgmt plane sits at 55555)
+                   * are not shadowed. Aliases fall through to closed-RST:
+                   * a real host resets high ports, it doesn't filter them */
     }
     if (lst) {
         if (flags & S419_ACK) {
