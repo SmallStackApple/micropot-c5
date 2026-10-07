@@ -7,9 +7,16 @@
  */
 #include <string.h>
 
+#include "mp_cfg.h"
+
 #include "s419_pkt.h"
 #include "s419_priv.h"
 #include "s419_tcp_internal.h"
+
+/* Idle reaper config (sess.idle_s, hot): re-read at 1 s granularity to
+ * keep strcmp traffic off the 10 ms fast path. 0 = disabled. */
+static int64_t  s_idle_cfg_next_ms;
+static uint32_t s_idle_s;
 
 static void retransmit(s419_tcb *tcb)
 {
@@ -51,12 +58,28 @@ static void retransmit(s419_tcb *tcb)
 void s419_tcp_tick(void)
 {
     int64_t now = s419_now_ms();
+    if (now >= s_idle_cfg_next_ms) {
+        s_idle_cfg_next_ms = now + 1000;
+        s_idle_s = mp_cfg_u32("sess.idle_s", 0);
+    }
     s419_tcb *tcb = s419_tcbs();
     while (tcb) {
         s419_tcb *next = tcb->next;
         bool gone = false;
 
-        if (tcb->rto_armed && now >= tcb->rto_due_ms && !tcb->dead) {
+        /* Idle reaper: a parked ESTABLISHED connection pins its 20 KiB of
+         * rings forever (real sshd never times out — this is an explicit,
+         * opt-in honeypot resource valve). Kill silently, like the host
+         * wedged; the conn task wakes on rx_sem and releases. */
+        if (s_idle_s && tcb->state == S419_S_ESTABLISHED && !tcb->dead &&
+            tcb->last_rx_ms &&
+            now - tcb->last_rx_ms > (int64_t)s_idle_s * 1000) {
+            s419_report_reaped(tcb,
+                               (uint32_t)((now - tcb->last_rx_ms) / 1000));
+            gone = s419_tcp_kill(tcb);
+        }
+
+        if (!gone && tcb->rto_armed && now >= tcb->rto_due_ms && !tcb->dead) {
             tcb->retries++;
             uint8_t max = tcb->state == S419_S_SYN_RECV
                               ? s419_par->synack_retries

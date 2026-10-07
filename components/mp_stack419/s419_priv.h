@@ -109,6 +109,7 @@ typedef struct s419_tcb {
     uint32_t rto_ms, srtt_ms, rttvar_ms;
     bool     rtt_valid, meas_ok;
     int64_t  sent_ms;       /* when the oldest unacked segment went out */
+    int64_t  last_rx_ms;    /* last inbound segment (sess.idle_s reaper) */
     int64_t  rto_due_ms;
     bool     rto_armed;
     uint8_t  retries;
@@ -170,6 +171,7 @@ void      s419_udp_send(uint32_t lip, uint32_t rip,
 int64_t   s419_now_ms(void);
 void      s419_report_overload(const s419_listener_t *lst);
 void      s419_report_synflood(void);
+void      s419_report_reaped(const s419_tcb *tcb, uint32_t idle_s);
 
 /* ---- s419_tcp.c ---- */
 void s419_tcp_new_syn(const s419_listener_t *lst,

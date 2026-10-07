@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "lwip/def.h"
 #include "lwip/ip_addr.h"
 #include "lwip/pbuf.h"
 #include "lwip/raw.h"
@@ -72,6 +73,8 @@ static const mp_cfg_key_t s_cfg_keys[] = {
      * of the fingerprint, don't touch it unless you mean to. */
     { "stack.rx_cap",  MP_CFG_T_U32, { .u.u32 = S419_RX_CAP },      1024, 16384, NULL, false, NULL, true },
     { "stack.tx_cap",  MP_CFG_T_U32, { .u.u32 = S419_TX_CAP },      4096, 65536, NULL, false, NULL, true },
+    /* 0 = off. Hot: the timer tick re-reads it once per second. */
+    { "sess.idle_s",   MP_CFG_T_U32, { .u.u32 = 0 },                0,    86400, NULL, false, NULL, false },
 };
 
 /* per-state TCB census, refreshed every 10 ms tick in the tcpip thread so
@@ -191,6 +194,28 @@ void s419_report_synflood(void)
     mp_evt_t e;
     mp_evt_begin(&e, NULL, "net", "net.syn_flood");
     mp_evt_int(&e, "syn_recv", s419_synrecv_cap);
+    mp_evt_send(&e);
+}
+
+void s419_report_reaped(const s419_tcb *tcb, uint32_t idle_s)
+{
+    /* same big-endian -> lwIP-word conversion the accept path uses */
+    mp_session_t sess = {
+        .sock = -1,
+        .src_ip = PP_HTONL(tcb->rip),
+        .src_port = tcb->rport,
+        .dst_ip = PP_HTONL(tcb->lip),
+        .dst_port = tcb->lport,
+        .id = 0,
+        .start_us = 0,
+        .persona = tcb->listener ? tcb->listener->persona : NULL,
+    };
+    mp_evt_t e;
+    mp_evt_begin(&e, &sess, "net", "session.reaped");
+    mp_evt_int(&e, "idle_s", (long long)idle_s);
+    if (tcb->listener && tcb->listener->name) {
+        mp_evt_str(&e, "svc", tcb->listener->name);
+    }
     mp_evt_send(&e);
 }
 

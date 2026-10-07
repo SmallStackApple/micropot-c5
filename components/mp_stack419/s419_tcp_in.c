@@ -203,6 +203,7 @@ void s419_tcp_input(s419_tcb *tcb, const uint8_t *th, size_t tcp_len,
 {
     (void)ip_src;
     (void)ip_dst;
+    tcb->last_rx_ms = s419_now_ms(); /* activity stamp for the idle reaper */
     uint32_t seg_seq = s419_rd32(th + 4);
     uint32_t seg_ack = s419_rd32(th + 8);
     uint8_t  flags = th[13];
