@@ -22,6 +22,7 @@
 #include <wolfssl/ssl.h>
 #include <wolfssh/ssh.h>
 
+#include "mp_cfg.h"
 #include "mp_core.h"
 #include "mp_log.h"
 #include "mp_ssh_server.h"
@@ -77,8 +78,13 @@ static WOLFSSH_CTX *s_ctx;
  * buffers, the conn task's 8 KiB stack) and hydra -t 8 drove the heap
  * minimum to 7 KiB. Past the cap the connection closes before the
  * banner, exactly like an overloaded sshd (clients and hydra just
- * retry, which is what real scans look like too). */
-#define PREAUTH_MAX 3
+ * retry, which is what real scans look like too). The cap is the
+ * ssh.preauth_max config key: tune it against the wolf_peak number the
+ * perf event reports. */
+static const mp_cfg_key_t s_cfg_keys[] = {
+    { "ssh.preauth_max", MP_CFG_T_U32, { .u.u32 = 3 }, 1, 8, NULL, false, NULL, false },
+};
+static bool s_cfg_registered;
 static volatile int s_preauth;
 
 /* -------------------------------------------------------- per-connection */
@@ -255,8 +261,10 @@ static void sshd_conn(mp_conn_t *conn, const mp_session_t *sess, void *arg)
 
     log_evt(sess, "ssh.connect", NULL, NULL);
 
-    if (s_preauth >= PREAUTH_MAX) {
-        ESP_LOGD(TAG, "pre-auth cap (%d) reached, dropping", PREAUTH_MAX);
+    uint32_t preauth_cap = mp_cfg_u32("ssh.preauth_max", 3);
+    if (s_preauth >= (int)preauth_cap) {
+        ESP_LOGD(TAG, "pre-auth cap (%lu) reached, dropping",
+                 (unsigned long)preauth_cap);
         return; /* peer retries, like against MaxStartups */
     }
     __sync_fetch_and_add(&s_preauth, 1);
@@ -331,6 +339,10 @@ done:
 static esp_err_t sshd_start(mp_service_t *svc)
 {
     mp_wolfmem_anchor();
+    if (!s_cfg_registered) {
+        mp_cfg_register(s_cfg_keys, sizeof(s_cfg_keys) / sizeof(s_cfg_keys[0]));
+        s_cfg_registered = true;
+    }
 
     const mp_sshd_behavior_t *b =
         svc->brand ? mp_brand_behavior(svc->brand, "sshd") : NULL;

@@ -15,11 +15,13 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "lwip/stats.h"
 
 #include "mp_cfg.h"
 #include "mp_log.h"
 #include "mp_perf.h"
 #include "mp_stack419.h"
+#include "mp_wolfmem.h"
 #include "mp_xport.h"
 
 static const char *TAG = "mp_perf";
@@ -67,12 +69,16 @@ static void perf_round(void)
     uint32_t tick_delta = tick - s_prev_tick;
     s_prev_tick = tick;
 
+    uint32_t wolf_cur = 0, wolf_peak = 0;
+    mp_wolfmem_stats(&wolf_cur, &wolf_peak, NULL);
+
     /* serial line (formerly main's stats_task) */
     int64_t rx_age = mp_s419_rx_age_ms();
-    ESP_LOGI(TAG, "stats: heap %lu (min %lu) psram %lu sessions %lu tcbs %u "
+    ESP_LOGI(TAG, "stats: heap %lu (min %lu) psram %lu wolf %lu/%lu sessions %lu tcbs %u "
              "rssi %d rx_age %llds tick +%lu logdrop %lu",
              (unsigned long)heap_free, (unsigned long)heap_min,
-             (unsigned long)psram, (unsigned long)sessions,
+             (unsigned long)psram, (unsigned long)wolf_cur,
+             (unsigned long)wolf_peak, (unsigned long)sessions,
              (unsigned)mp_s419_tcb_count(), rssi,
              (long long)(rx_age < 0 ? -1 : rx_age / 1000),
              (unsigned long)tick_delta, (unsigned long)dropped);
@@ -90,6 +96,14 @@ static void perf_round(void)
     mp_evt_int(&e, "temp_c_x10", (long long)(temp_c * 10));
     mp_evt_int(&e, "log_dropped", dropped);
     mp_evt_int(&e, "log_queued", queued);
+    mp_evt_int(&e, "wolf_cur", wolf_cur);
+    mp_evt_int(&e, "wolf_peak", wolf_peak);
+#if LWIP_STATS && MEMP_STATS
+    /* lwIP only carries the log socket / DHCP / gw probe; big numbers
+     * here would mean something is leaking PCBs or pbufs. */
+    mp_evt_int(&e, "lwip_tcp_pcb", lwip_stats.memp[MEMP_TCP_PCB].used);
+    mp_evt_int(&e, "lwip_pbuf", lwip_stats.memp[MEMP_PBUF_POOL].used);
+#endif
     mp_evt_send(&e);
 
     /* alert edges */

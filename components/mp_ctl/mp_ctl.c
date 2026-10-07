@@ -34,6 +34,7 @@
 #include "mp_stack419.h"
 #include "mp_util.h"
 #include "mp_vdev.h"
+#include "mp_wolfmem.h"
 #include "mp_xport.h"
 
 #include "lwip/def.h"
@@ -173,6 +174,14 @@ static void cmd_status(jw_t *w)
     jw_raw(w, tmp);
     jw_raw(w, ",\"sessions_active\":");
     snprintf(tmp, sizeof(tmp), "%lu", (unsigned long)mp_xport_active());
+    jw_raw(w, tmp);
+    uint32_t wolf_cur = 0, wolf_peak = 0;
+    mp_wolfmem_stats(&wolf_cur, &wolf_peak, NULL);
+    jw_raw(w, ",\"wolf_cur\":");
+    snprintf(tmp, sizeof(tmp), "%lu", (unsigned long)wolf_cur);
+    jw_raw(w, tmp);
+    jw_raw(w, ",\"wolf_peak\":");
+    snprintf(tmp, sizeof(tmp), "%lu", (unsigned long)wolf_peak);
     jw_raw(w, tmp);
     jw_raw(w, ",\"boot\":");
     snprintf(tmp, sizeof(tmp), "%lu", (unsigned long)mp_log_boot_count());

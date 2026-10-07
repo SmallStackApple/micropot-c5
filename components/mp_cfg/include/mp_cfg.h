@@ -22,7 +22,7 @@ extern "C" {
 
 #define MP_CFG_KEY_MAX  15 /* NVS namespace key limit */
 #define MP_CFG_STR_MAX  63
-#define MP_CFG_MAX_KEYS 48
+#define MP_CFG_MAX_KEYS 64
 
 typedef enum {
     MP_CFG_T_STR = 0,

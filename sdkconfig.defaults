@@ -23,6 +23,9 @@ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 
 # --- Networking: more sockets for concurrent honeypot services + logger ----
 CONFIG_LWIP_MAX_SOCKETS=16
+# Pool water marks (tcp_pcb/pbuf used) in the perf event; lwIP only carries
+# the log socket, DHCP and the gw probe, so the numbers should stay small.
+CONFIG_LWIP_STATS=y
 
 # --- Linux 4.19 TCP/IP fingerprint approximation --------------------------
 # Target (nmap-os-db "Fingerprint Linux 4.19", generic Debian record):

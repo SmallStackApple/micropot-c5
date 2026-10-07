@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "mp_ssh_server.c" "mp_wolfmem.c"
     INCLUDE_DIRS "include"
-    REQUIRES mp_core mp_log wolfssl__wolfssh
+    REQUIRES mp_core mp_cfg mp_log wolfssl__wolfssh
     PRIV_REQUIRES esp_timer heap
 )
 
