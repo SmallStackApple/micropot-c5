@@ -634,6 +634,15 @@ bool s419_feed_ip4(struct pbuf *p)
         return false;
     }
     uint32_t ip_dst = s419_rd32(ip + 16);
+    /* The real netif address always wins over the alias table: a DHCP lease
+     * can legitimately collide with a statically configured alias (the DHCP
+     * server doesn't know about our aliases). Without this, every packet
+     * for the collided address — including replies to lwIP's OWN outbound
+     * flows (log collector) and lwIP-hosted services — would be eaten here
+     * and dropped, silently strangling the primary. */
+    if (ip_dst == s419_our_ip()) {
+        return false; /* primary: lwIP's normal path (raw PCBs see it too) */
+    }
     if (!mp_vdev_by_vaddr(PP_HTONL(ip_dst))) {
         return false; /* not an alias: lwIP's normal path handles it */
     }

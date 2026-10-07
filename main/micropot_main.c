@@ -315,6 +315,19 @@ void app_main(void)
         mp_net_get_mac_str(mac, sizeof(mac));
         mp_log_net_up(ip, gw, mac);
         ESP_LOGI(TAG, "honeypot online at %s (gw %s, mac %s)", ip, gw, mac);
+        /* A DHCP lease can collide with a statically configured alias —
+         * the server doesn't know our aliases. The vif feed shadows that
+         * alias (primary wins); warn so the operator moves the alias out
+         * of the DHCP pool. */
+        if (mp_vdev_by_vaddr(mp_net_get_ip())) {
+            ESP_LOGW(TAG, "primary IP %s collides with a vdev alias — "
+                     "alias shadowed, move it out of the DHCP pool", ip);
+            mp_evt_t e;
+            mp_evt_begin(&e, NULL, "system", "config_warn");
+            mp_evt_str(&e, "msg", "primary IP collides with vdev alias");
+            mp_evt_str(&e, "ip", ip);
+            mp_evt_send(&e);
+        }
     } else {
         ESP_LOGW(TAG, "no IP obtained within timeout, starting services anyway");
     }
