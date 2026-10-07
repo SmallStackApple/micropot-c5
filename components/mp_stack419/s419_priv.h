@@ -27,7 +27,6 @@
 #define S419_MAX_LISTENERS 24 /* 4 svcs + 4 pasv per persona, plus mgmt */
 #define S419_SYNRECV_CAP   32
 #define S419_MAX_PKT       1600
-
 /* Hard ceiling on live TCBs across all states (SYN_RECV, established,
  * FIN_WAIT_2, TIME_WAIT). Without it, a connection-churn flood accumulates
  * one small TCB per closed connection for the whole 60 s TIME_WAIT and can
@@ -39,6 +38,14 @@
  *  Inbound traffic to these ports belongs to lwIP's own outbound flows
  *  (log collector) and must pass through untouched. */
 #define S419_EPHEMERAL_MIN 49152
+
+/* Runtime-tunable caps, snapshotted from the stack.* config keys at engine
+ * init (s419_core.c). The S419_* #defines above remain the defaults and
+ * the validation ranges for those keys. */
+extern uint16_t s419_max_tcbs;
+extern uint16_t s419_synrecv_cap;
+extern uint32_t s419_rx_cap;
+extern uint32_t s419_tx_cap;
 
 typedef enum {
     S419_S_CLOSED = 0,

@@ -65,6 +65,9 @@ static const mp_cfg_key_t s_cfg_keys[] = {
     { "log.port", MP_CFG_T_U32, { .u.u32 = CONFIG_MICROPOT_LOG_PORT }, 1, 65535, NULL, false, NULL, true },
     { "log.tcp",  MP_CFG_T_BOOL,{ .u.b = MP_CFG_DEFAULT_TCP }, 0, 0, NULL, false, NULL, true },
     { "log.console", MP_CFG_T_BOOL, { .u.b = MP_CFG_DEFAULT_CONSOLE }, 0, 0, NULL, false, NULL, false },
+    /* event queue depth; past it producers drop (counted in logdrop).
+     * ~460 B PSRAM per slot. */
+    { "log.queue", MP_CFG_T_U32, { .u.u32 = MP_LOG_QUEUE_LEN }, 8, 128, NULL, false, NULL, true },
 };
 
 /* -------------------------------------------------------------- transport */
@@ -447,12 +450,12 @@ esp_err_t mp_log_init(void)
     /* Socket is opened lazily on first send: the lwIP/tcpip stack must already
      * be initialised (esp_netif_init) before any socket() call. */
 
-    /* The ~11 KiB event queue lives in PSRAM: producers only call
+    /* The event queue lives in PSRAM: producers only call
      * xQueueSend from task context (never an ISR), so it is safe there and
      * keeps HP SRAM free. The logger task itself stays internal because it
      * commits the NVS boot counter. */
-    s_queue = xQueueCreateWithCaps(MP_LOG_QUEUE_LEN, sizeof(mp_evt_t),
-                                   MALLOC_CAP_SPIRAM);
+    s_queue = xQueueCreateWithCaps(mp_cfg_u32("log.queue", MP_LOG_QUEUE_LEN),
+                                   sizeof(mp_evt_t), MALLOC_CAP_SPIRAM);
     if (!s_queue) {
         return ESP_ERR_NO_MEM;
     }

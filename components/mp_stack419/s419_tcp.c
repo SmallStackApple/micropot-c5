@@ -138,7 +138,7 @@ int s419_app_send(s419_tcb *tcb, const void *buf, size_t len)
     while (left) {
         portENTER_CRITICAL(&tcb->lock);
         bool dead = tcb->dead || tcb->close_posted;
-        size_t space = S419_TX_CAP - tcb->tx_len;
+        size_t space = s419_tx_cap - tcb->tx_len;
         size_t n = space < left ? space : left;
         if (!dead && n) {
             memcpy(tcb->txbuf + tcb->tx_len, p, n);

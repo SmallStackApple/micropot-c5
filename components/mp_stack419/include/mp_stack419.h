@@ -38,6 +38,11 @@ uint32_t mp_s419_tick_count(void);
  *  TIME_WAIT/FIN_WAIT_2 state is accumulating. */
 uint16_t mp_s419_tcb_count(void);
 
+/** Per-state TCB census, refreshed every 10 ms tick (tcpip thread): cheap
+ *  to call from any task, up to 10 ms stale. Any pointer may be NULL. */
+void mp_s419_state_counts(uint16_t *established, uint16_t *syn_recv,
+                          uint16_t *time_wait, uint16_t *other);
+
 /** The xport backend that routes listeners/connections through the engine. */
 extern const mp_xport_backend_t mp_xport_s419;
 

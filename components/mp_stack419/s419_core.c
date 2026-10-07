@@ -23,6 +23,7 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 
+#include "mp_cfg.h"
 #include "mp_log.h"
 #include "mp_net.h"
 #include "mp_vdev.h"
@@ -50,13 +51,32 @@ static s419_listener_t s_listeners[S419_MAX_LISTENERS];
 static size_t          s_n_listeners;
 
 static s419_tcb       *s_tcbs;
-static uint16_t        s_tcb_count;       /* live TCBs, capped by S419_MAX_TCBS */
-static uint16_t        s_synrecv_count;
+static uint16_t        s_tcb_count;       /* live TCBs, capped by s419_max_tcbs */
 static uint16_t        s_icmp_id;
 static int64_t         s_last_flood_evt_ms;
 static int64_t         s_last_tx_warn_ms; /* raw_sendto warning throttle */
 static int64_t         s_last_rx_ms = -1; /* any inbound IPv4, diagnostics */
 static volatile uint32_t s_tick_count;    /* tcpip-thread heartbeat */
+
+/* stack.* config values, snapshotted at engine init (reboot keys). */
+uint16_t s419_max_tcbs    = S419_MAX_TCBS;
+uint16_t s419_synrecv_cap = S419_SYNRECV_CAP;
+uint32_t s419_rx_cap      = S419_RX_CAP;
+uint32_t s419_tx_cap      = S419_TX_CAP;
+
+static const mp_cfg_key_t s_cfg_keys[] = {
+    /* worst case PSRAM = tcbs * (rx_cap + tx_cap): defaults ~1.9 MiB */
+    { "stack.tcbs",    MP_CFG_T_U32, { .u.u32 = S419_MAX_TCBS },    16,   256,   NULL, false, NULL, true },
+    { "stack.synrecv", MP_CFG_T_U32, { .u.u32 = S419_SYNRECV_CAP }, 8,    128,   NULL, false, NULL, true },
+    /* rx_cap shapes the advertised window growth on the wire: it is part
+     * of the fingerprint, don't touch it unless you mean to. */
+    { "stack.rx_cap",  MP_CFG_T_U32, { .u.u32 = S419_RX_CAP },      1024, 16384, NULL, false, NULL, true },
+    { "stack.tx_cap",  MP_CFG_T_U32, { .u.u32 = S419_TX_CAP },      4096, 65536, NULL, false, NULL, true },
+};
+
+/* per-state TCB census, refreshed every 10 ms tick in the tcpip thread so
+ * readers on other tasks never walk the live list */
+static volatile uint16_t s_c_estab, s_c_synrecv, s_c_tw, s_c_other;
 
 int64_t mp_s419_rx_age_ms(void)
 {
@@ -170,7 +190,7 @@ void s419_report_synflood(void)
 
     mp_evt_t e;
     mp_evt_begin(&e, NULL, "net", "net.syn_flood");
-    mp_evt_int(&e, "syn_recv", S419_SYNRECV_CAP);
+    mp_evt_int(&e, "syn_recv", s419_synrecv_cap);
     mp_evt_send(&e);
 }
 
@@ -178,7 +198,7 @@ void s419_report_synflood(void)
 
 s419_tcb *s419_tcb_alloc(void)
 {
-    if (s_tcb_count >= S419_MAX_TCBS) {
+    if (s_tcb_count >= s419_max_tcbs) {
         return NULL; /* overloaded: drop the SYN, like a full SYN queue */
     }
     s419_tcb *tcb = calloc(1, sizeof(*tcb));
@@ -187,15 +207,15 @@ s419_tcb *s419_tcb_alloc(void)
     }
     /* Rings live in PSRAM when present; they are only touched under the
      * TCB spinlock by the tcpip thread and one conn task. */
-    tcb->rxbuf = heap_caps_malloc(S419_RX_CAP,
+    tcb->rxbuf = heap_caps_malloc(s419_rx_cap,
                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    tcb->txbuf = heap_caps_malloc(S419_TX_CAP,
+    tcb->txbuf = heap_caps_malloc(s419_tx_cap,
                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!tcb->rxbuf) {
-        tcb->rxbuf = heap_caps_malloc(S419_RX_CAP, MALLOC_CAP_8BIT);
+        tcb->rxbuf = heap_caps_malloc(s419_rx_cap, MALLOC_CAP_8BIT);
     }
     if (!tcb->txbuf) {
-        tcb->txbuf = heap_caps_malloc(S419_TX_CAP, MALLOC_CAP_8BIT);
+        tcb->txbuf = heap_caps_malloc(s419_tx_cap, MALLOC_CAP_8BIT);
     }
     if (!tcb->rxbuf || !tcb->txbuf) {
         heap_caps_free(tcb->rxbuf);
@@ -560,6 +580,21 @@ static void s419_tick(void *arg)
     (void)arg;
     s_tick_count++; /* tcpip-thread heartbeat, read by the stats task */
     s419_tcp_tick();
+    /* per-state census: refreshed here so other tasks read statics instead
+     * of walking a list that the tcpip thread mutates */
+    uint16_t n_estab = 0, n_syn = 0, n_tw = 0, n_other = 0;
+    for (s419_tcb *t = s_tcbs; t; t = t->next) {
+        switch (t->state) {
+        case S419_S_ESTABLISHED: n_estab++; break;
+        case S419_S_SYN_RECV:    n_syn++;   break;
+        case S419_S_TIME_WAIT:   n_tw++;    break;
+        default:                 n_other++; break;
+        }
+    }
+    s_c_estab = n_estab;
+    s_c_synrecv = n_syn;
+    s_c_tw = n_tw;
+    s_c_other = n_other;
     sys_timeout(10, s419_tick, NULL);
 }
 
@@ -619,9 +654,12 @@ static void core_up(void *ctx)
     mp_vif_set_ip4_feed(s419_feed_ip4);
     s_icmp_id = (uint16_t)esp_random(); /* natural, non-zero counter start */
     sys_timeout(10, s419_tick, NULL);
-    ESP_LOGI(TAG, "stack419 engine up (ttl=%u mss=%u wnd=%u wscale=%u ts=%d)",
+    ESP_LOGI(TAG, "stack419 engine up (ttl=%u mss=%u wnd=%u wscale=%u ts=%d) "
+             "caps: tcbs=%u syn=%u rx=%lu tx=%lu",
              s419_par->ttl, s419_par->mss, s419_par->rcv_wnd,
-             s419_par->wscale, s419_par->timestamps);
+             s419_par->wscale, s419_par->timestamps,
+             (unsigned)s419_max_tcbs, (unsigned)s419_synrecv_cap,
+             (unsigned long)s419_rx_cap, (unsigned long)s419_tx_cap);
 }
 
 static void core_down(void *ctx)
@@ -636,7 +674,29 @@ static void core_down(void *ctx)
 void s419_core_init(const mp_s419_params_t *params)
 {
     s419_par = params;
+    mp_cfg_register(s_cfg_keys, sizeof(s_cfg_keys) / sizeof(s_cfg_keys[0]));
+    s419_max_tcbs = (uint16_t)mp_cfg_u32("stack.tcbs", S419_MAX_TCBS);
+    s419_synrecv_cap = (uint16_t)mp_cfg_u32("stack.synrecv", S419_SYNRECV_CAP);
+    s419_rx_cap = mp_cfg_u32("stack.rx_cap", S419_RX_CAP);
+    s419_tx_cap = mp_cfg_u32("stack.tx_cap", S419_TX_CAP);
     tcpip_callback_with_block(core_up, NULL, 1);
+}
+
+void mp_s419_state_counts(uint16_t *established, uint16_t *syn_recv,
+                          uint16_t *time_wait, uint16_t *other)
+{
+    if (established) {
+        *established = s_c_estab;
+    }
+    if (syn_recv) {
+        *syn_recv = s_c_synrecv;
+    }
+    if (time_wait) {
+        *time_wait = s_c_tw;
+    }
+    if (other) {
+        *other = s_c_other;
+    }
 }
 
 /* ------------------------------------------------------------- debug --- */

@@ -71,15 +71,17 @@ static void perf_round(void)
 
     uint32_t wolf_cur = 0, wolf_peak = 0;
     mp_wolfmem_stats(&wolf_cur, &wolf_peak, NULL);
+    uint16_t c_est = 0, c_syn = 0, c_tw = 0;
+    mp_s419_state_counts(&c_est, &c_syn, &c_tw, NULL);
 
     /* serial line (formerly main's stats_task) */
     int64_t rx_age = mp_s419_rx_age_ms();
-    ESP_LOGI(TAG, "stats: heap %lu (min %lu) psram %lu wolf %lu/%lu sessions %lu tcbs %u "
+    ESP_LOGI(TAG, "stats: heap %lu (min %lu) psram %lu wolf %lu/%lu sessions %lu tcbs %u(e%hu/s%hu/tw%hu) "
              "rssi %d rx_age %llds tick +%lu logdrop %lu",
              (unsigned long)heap_free, (unsigned long)heap_min,
              (unsigned long)psram, (unsigned long)wolf_cur,
              (unsigned long)wolf_peak, (unsigned long)sessions,
-             (unsigned)mp_s419_tcb_count(), rssi,
+             (unsigned)mp_s419_tcb_count(), c_est, c_syn, c_tw, rssi,
              (long long)(rx_age < 0 ? -1 : rx_age / 1000),
              (unsigned long)tick_delta, (unsigned long)dropped);
 
@@ -92,6 +94,9 @@ static void perf_round(void)
     mp_evt_int(&e, "psram_free", psram);
     mp_evt_int(&e, "sessions", sessions);
     mp_evt_int(&e, "tcbs", mp_s419_tcb_count());
+    mp_evt_int(&e, "tcb_estab", c_est);
+    mp_evt_int(&e, "tcb_syn_recv", c_syn);
+    mp_evt_int(&e, "tcb_time_wait", c_tw);
     mp_evt_int(&e, "rssi", rssi);
     mp_evt_int(&e, "temp_c_x10", (long long)(temp_c * 10));
     mp_evt_int(&e, "log_dropped", dropped);

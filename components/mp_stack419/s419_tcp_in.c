@@ -69,7 +69,7 @@ void s419_tcp_new_syn(const s419_listener_t *lst,
                       uint16_t lport, uint16_t rport,
                       const uint8_t *th, size_t tcp_len)
 {
-    if (s419_synrecv_count >= S419_SYNRECV_CAP) {
+    if (s419_synrecv_count >= s419_synrecv_cap) {
         s419_report_synflood();
         return; /* backlog full: drop, like Linux without syncookies */
     }
@@ -305,7 +305,7 @@ void s419_tcp_input(s419_tcb *tcb, const uint8_t *th, size_t tcp_len,
             uint32_t take = payload_len;
             if (tcb->rxbuf) {
                 portENTER_CRITICAL(&tcb->lock);
-                uint32_t space = S419_RX_CAP - tcb->rx_len;
+                uint32_t space = s419_rx_cap - tcb->rx_len;
                 take = payload_len < space ? payload_len : space;
                 if (take) {
                     memcpy(tcb->rxbuf + tcb->rx_len, th + doff, take);

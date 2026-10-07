@@ -10,6 +10,6 @@ idf_component_register(
         "s419_tcp_timer.c"
         "s419_xport.c"
     INCLUDE_DIRS "include"
-    REQUIRES mp_core mp_net mp_log lwip esp_timer
+    REQUIRES mp_core mp_net mp_log mp_cfg lwip esp_timer
     PRIV_REQUIRES esp_hw_support heap
 )
