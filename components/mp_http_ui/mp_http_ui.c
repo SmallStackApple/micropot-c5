@@ -12,6 +12,7 @@
 #include "mp_http_ui.h"
 #include "mp_http_behavior.h"
 #include "mp_log.h"
+#include "mp_stack419.h"
 
 static const char *TAG = "mp_http";
 
@@ -212,6 +213,9 @@ static esp_err_t http_start(mp_service_t *svc)
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
         return err;
     }
+    /* We hold this port with lwIP sockets: the packet engine must pass
+     * primary-destined traffic for it through instead of closed-RST. */
+    mp_s419_passthrough_port(svc->bind.port, true);
 
     const httpd_uri_t routes[] = {
         { .uri = "/",       .method = HTTP_GET,  .handler = root_get,   .user_ctx = NULL },

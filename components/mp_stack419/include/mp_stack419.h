@@ -43,6 +43,12 @@ uint16_t mp_s419_tcb_count(void);
 void mp_s419_state_counts(uint16_t *established, uint16_t *syn_recv,
                           uint16_t *time_wait, uint16_t *other);
 
+/** Mark/unmark a primary-address TCP port as owned by an lwIP-socket
+ *  service (esp_http_server in mp_http_ui). The engine passes such traffic
+ *  through to lwIP instead of answering with its crafted closed-RST.
+ *  Aliases can never host lwIP sockets, so this only affects the primary. */
+void mp_s419_passthrough_port(uint16_t port, bool add);
+
 /** The xport backend that routes listeners/connections through the engine. */
 extern const mp_xport_backend_t mp_xport_s419;
 

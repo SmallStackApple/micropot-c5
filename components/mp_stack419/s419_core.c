@@ -81,6 +81,39 @@ static const mp_cfg_key_t s_cfg_keys[] = {
  * readers on other tasks never walk the live list */
 static volatile uint16_t s_c_estab, s_c_synrecv, s_c_tw, s_c_other;
 
+/* Primary-address TCP ports owned by lwIP-socket services (esp_http_server
+ * in mp_http_ui): the engine must NOT closed-RST them, lwIP's socket layer
+ * answers instead. Only meaningful for the primary address — aliases can
+ * never host lwIP sockets. */
+#define S419_MAX_PASSTHROUGH 8
+static uint16_t s_passthrough[S419_MAX_PASSTHROUGH];
+static size_t   s_n_passthrough;
+
+void mp_s419_passthrough_port(uint16_t port, bool add)
+{
+    for (size_t i = 0; i < s_n_passthrough; i++) {
+        if (s_passthrough[i] == port) {
+            if (!add) {
+                s_passthrough[i] = s_passthrough[--s_n_passthrough];
+            }
+            return;
+        }
+    }
+    if (add && s_n_passthrough < S419_MAX_PASSTHROUGH) {
+        s_passthrough[s_n_passthrough++] = port;
+    }
+}
+
+static bool is_passthrough(uint16_t port)
+{
+    for (size_t i = 0; i < s_n_passthrough; i++) {
+        if (s_passthrough[i] == port) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int64_t mp_s419_rx_age_ms(void)
 {
     return s_last_rx_ms < 0 ? -1 : s419_now_ms() - s_last_rx_ms;
@@ -512,6 +545,9 @@ static u8_t on_tcp(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     }
 
     if (!(flags & S419_RST)) {
+        if (ip_dst == s419_our_ip() && is_passthrough(lport)) {
+            return 0; /* lwIP-socket service owns this port on the primary */
+        }
         s_dbg_rst_vaddr = PP_HTONL(ip_dst);
         s_dbg_rst_port = lport;
         s_dbg_rst_count++;
