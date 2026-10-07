@@ -189,9 +189,34 @@ Two layers:
 
 | Live-immediate keys | Reboot-applied keys |
 |---|---|
-| `log.console`, `perf.int_s`, `perf.heap_kb` | `wifi.ssid`, `wifi.pass` |
-| `cred.root`, `cred.admin` (shadow re-hashes on change) | `port.telnet/http/ssh/ftp` |
+| `log.console`, `perf.int_s`, `perf.heap_kb` | `wifi.ssid`, `wifi.pass`, `net.mac`, `net.hostname` |
+| `cred.root`, `cred.admin` (shadow re-hashes on change) | `persona` (primary persona id; empty = Kconfig) |
 | `ctl.psk`, `ctl.admin` | `vdev1..7.ip/persona`, `mgmt.ip`, `ctl.port`, `log.host/port/tcp` |
+| `ssh.preauth_max` (1–8, KEX concurrency gate) | `log.queue` (8–128 events), `log.ring` (SPIFFS spillover) |
+| `sess.idle_s` (0=off; reaps parked connections) | `stack.tcbs` (16–256), `stack.synrecv` (8–128) |
+| `probe.enabled` (**default off**), `probe.int_s` | `stack.rx_cap` (1–16 KiB), `stack.tx_cap` (4–64 KiB) |
+
+## Memory & connection budget
+
+Three independent pools; all tunables above, measured values from the
+on-device perf event (`system.perf` / mgmt `status`):
+
+| Pool | Holds | Cost model | Watch |
+|---|---|---|---|
+| **s419 TCBs** (PSRAM) | every honeypot + mgmt TCP connection | open TCB = `rx_cap + tx_cap` (default 20 KiB); TIME_WAIT drops its rings | `tcb_estab/syn_recv/time_wait`, `tcbs` |
+| **wolfSSL/wolfSSH** | SSH KEX working set, channel buffers | tens of KiB per in-flight KEX; gated by `ssh.preauth_max` | `wolf_cur`, `wolf_peak` (exact, via the XMALLOC shim) |
+| **internal SRAM** | lwIP (log socket ~12 KiB, DHCP, gw probe), task stacks, small wolf allocs | fixed-ish footprint | `heap_free`, `heap_min`, `lwip_tcp_pcb/pbuf` |
+
+Rules of thumb:
+
+- worst-case PSRAM ≈ `stack.tcbs` × (`stack.rx_cap` + `stack.tx_cap`);
+  defaults 96 × 20 KiB ≈ 1.9 MiB of the 8 MiB
+- `stack.rx_cap` shapes the advertised TCP window growth on the wire —
+  it is part of the nmap fingerprint; change it only deliberately
+- `sess.idle_s` (default 0 = off, like a real sshd) silently kills
+  connections idle longer than N seconds and logs `session.reaped`
+- the link probes (`probe.*`) are compiled-in but **silent by default**:
+  periodic ICMP/ARP to the gateway is traffic no real host emits
 
 ## Management plane
 
@@ -231,6 +256,8 @@ Each brand declares a vendor OUI in `mp_brand_meta_t.mac_oui`. At boot,
 the chip's factory eFuse MAC (so every board stays distinct on the wire) and
 calls `esp_wifi_set_mac()` while the interface is still disabled. The DHCP
 hostname comes from `mp_persona_t.hostname` via `esp_netif_set_hostname()`.
+Both are runtime-overridable: `net.mac` (full `aa:bb:cc:dd:ee:ff`, wins over
+the OUI path) and `net.hostname`.
 
 | Brand | Vendor OUI | nmap prefix lookup | Hostname |
 |-------|-----------|--------------------|----------|
