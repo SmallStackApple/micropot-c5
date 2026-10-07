@@ -23,3 +23,39 @@ uint32_t mp_session_next_id(void)
     portEXIT_CRITICAL(&s_id_lock);
     return id;
 }
+
+static int hexnib(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+bool mp_parse_mac(const char *s, uint8_t out[6])
+{
+    if (!s || !out) {
+        return false;
+    }
+    for (int i = 0; i < 6; i++) {
+        int hi = hexnib(s[i * 3]);
+        int lo = hexnib(s[i * 3 + 1]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        out[i] = (uint8_t)((hi << 4) | lo);
+        if (i < 5 && s[i * 3 + 2] != ':') {
+            return false;
+        }
+    }
+    if (s[17] != '\0') {
+        return false;
+    }
+    return (out[0] & 1) == 0; /* group/multicast bit: not a station MAC */
+}

@@ -68,6 +68,9 @@ static const mp_cfg_key_t s_cfg_keys[] = {
     /* event queue depth; past it producers drop (counted in logdrop).
      * ~460 B PSRAM per slot. */
     { "log.queue", MP_CFG_T_U32, { .u.u32 = MP_LOG_QUEUE_LEN }, 8, 128, NULL, false, NULL, true },
+    /* SPIFFS spillover ring: offline events persist across reboots and
+     * replay when the collector returns. false = volatile-only. */
+    { "log.ring", MP_CFG_T_BOOL, { .u.b = true }, 0, 0, NULL, false, NULL, true },
 };
 
 /* -------------------------------------------------------------- transport */
@@ -429,11 +432,15 @@ static void cfg_audit(const char *key, const char *oldv, const char *newv,
 
 esp_err_t mp_log_init(void)
 {
-    read_boot_counter();
-    ring_mount();
-
+    /* keys must be registered before ANY mp_cfg_* read here, or an NVS
+     * override of that key (e.g. log.ring=false) is invisible */
     mp_cfg_register(s_cfg_keys, sizeof(s_cfg_keys) / sizeof(s_cfg_keys[0]));
     mp_cfg_set_audit_hook(cfg_audit);
+
+    read_boot_counter();
+    if (mp_cfg_bool("log.ring", true)) {
+        ring_mount();
+    }
 
     char host[16];
     mp_cfg_str("log.host", host, sizeof(host));

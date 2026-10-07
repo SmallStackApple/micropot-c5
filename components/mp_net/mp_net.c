@@ -110,6 +110,10 @@ esp_err_t mp_net_init(const uint8_t mac_oui[3], const char *hostname)
     static const mp_cfg_key_t keys[] = {
         { "wifi.ssid", MP_CFG_T_STR, { .u.str = CONFIG_MICROPOT_WIFI_SSID }, 0, 0, NULL, false, NULL, true },
         { "wifi.pass", MP_CFG_T_STR, { .u.str = CONFIG_MICROPOT_WIFI_PASSWORD }, 0, 0, NULL, true, NULL, true },
+        /* full station MAC override; empty = brand OUI + factory tail */
+        { "net.mac", MP_CFG_T_STR, { .u.str = "" }, 0, 0, NULL, false, NULL, true },
+        /* DHCP hostname override; empty = persona hostname */
+        { "net.hostname", MP_CFG_T_STR, { .u.str = "" }, 0, 0, NULL, false, NULL, true },
     };
     mp_cfg_register(keys, sizeof(keys) / sizeof(keys[0]));
 
@@ -148,9 +152,27 @@ esp_err_t mp_net_init(const uint8_t mac_oui[3], const char *hostname)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_LOGI(TAG, "station started, joining '%s'", ssid);
 
-    /* Vendor MAC spoofing: brand OUI + the unique tail of the factory MAC.
-     * esp_wifi_set_mac() must be called while the interface is still disabled. */
-    if (mac_oui && (mac_oui[0] | mac_oui[1] | mac_oui[2])) {
+    /* MAC selection: net.mac (full override) > brand OUI + factory tail >
+     * factory MAC. esp_wifi_set_mac() must be called while the interface
+     * is still disabled. */
+    uint8_t mac_override[6];
+    char mac_cfg[24];
+    mp_cfg_str("net.mac", mac_cfg, sizeof(mac_cfg));
+    bool have_override = mac_cfg[0] && mp_parse_mac(mac_cfg, mac_override);
+    if (mac_cfg[0] && !have_override) {
+        ESP_LOGW(TAG, "net.mac '%s' invalid (want aa:bb:cc:dd:ee:ff, "
+                 "unicast); falling back", mac_cfg);
+    }
+    if (have_override) {
+        memcpy(s_mac, mac_override, 6);
+        esp_err_t err = esp_wifi_set_mac(WIFI_IF_STA, s_mac);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "MAC override failed (%s), keeping factory MAC",
+                     esp_err_to_name(err));
+        } else {
+            ESP_LOGI(TAG, "station MAC overridden to %s", mac_cfg);
+        }
+    } else if (mac_oui && (mac_oui[0] | mac_oui[1] | mac_oui[2])) {
         uint8_t base[6] = { 0 };
         if (esp_efuse_mac_get_default(base) == ESP_OK) {
             s_mac[0] = mac_oui[0];
@@ -174,10 +196,13 @@ esp_err_t mp_net_init(const uint8_t mac_oui[3], const char *hostname)
         ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, s_mac));
     }
 
-    if (hostname && hostname[0]) {
-        esp_err_t err = esp_netif_set_hostname(s_sta_netif, hostname);
+    char hn_cfg[48];
+    mp_cfg_str("net.hostname", hn_cfg, sizeof(hn_cfg));
+    const char *use_hostname = hn_cfg[0] ? hn_cfg : hostname;
+    if (use_hostname && use_hostname[0]) {
+        esp_err_t err = esp_netif_set_hostname(s_sta_netif, use_hostname);
         if (err == ESP_OK) {
-            ESP_LOGI(TAG, "DHCP hostname set to '%s'", hostname);
+            ESP_LOGI(TAG, "DHCP hostname set to '%s'", use_hostname);
         } else {
             ESP_LOGW(TAG, "failed to set hostname: %s", esp_err_to_name(err));
         }

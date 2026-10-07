@@ -195,18 +195,38 @@ static void gw_arp_probe(void)
 
 #if CONFIG_MICROPOT_LINK_PROBES
 /* Link-probe rounds live here (debug only); the health line moved to
- * mp_perf, which also feeds the collector. */
+ * mp_perf, which also feeds the collector. probe.enabled defaults OFF:
+ * periodic ICMP/ARP to the gateway is traffic a real Linux host never
+ * sends, so the compiled-in probes stay silent unless explicitly armed
+ * for link diagnosis. */
+static const mp_cfg_key_t probe_keys[] = {
+    { "probe.enabled", MP_CFG_T_BOOL, { .u.b = false }, 0, 0, NULL, false, NULL, false },
+    { "probe.int_s",  MP_CFG_T_U32, { .u.u32 = 15 }, 5, 3600, NULL, false, NULL, false },
+};
+
 static void stats_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(15000));
+        uint32_t int_s = mp_cfg_u32("probe.int_s", 15);
+        vTaskDelay(pdMS_TO_TICKS(int_s * 1000));
+        if (!mp_cfg_bool("probe.enabled", false)) {
+            continue;
+        }
         gw_arp_probe();
         gw_ping_once();
         ESP_LOGI(TAG, "probes: gwping %dms gwarp %d", s_gw_rtt_ms, s_gw_arp);
     }
 }
 #endif /* CONFIG_MICROPOT_LINK_PROBES */
+
+static bool validate_persona(const mp_cfg_value_t *v)
+{
+    if (!v->u.str[0]) {
+        return true; /* empty = Kconfig default persona */
+    }
+    return mp_persona_find(v->u.str) != NULL;
+}
 
 void app_main(void)
 {
@@ -224,6 +244,25 @@ void app_main(void)
      * up the radio: the primary brand's OUI and persona hostname are applied
      * to the interface. */
     register_all();
+
+    /* Primary persona: runtime key wins over the Kconfig choice. Must be
+     * applied before mp_vdev_load() snapshots vdev0. */
+    static const mp_cfg_key_t persona_key[] = {
+        { "persona", MP_CFG_T_STR, { .u.str = "" }, 0, 0, validate_persona, false, NULL, true },
+    };
+    mp_cfg_register(persona_key, sizeof(persona_key) / sizeof(persona_key[0]));
+#if CONFIG_MICROPOT_LINK_PROBES
+    mp_cfg_register(probe_keys, sizeof(probe_keys) / sizeof(probe_keys[0]));
+#endif
+    char pid[32];
+    mp_cfg_str("persona", pid, sizeof(pid));
+    if (pid[0]) {
+        const mp_persona_t *p = mp_persona_find(pid);
+        if (!p) {
+            fatal_restart("unknown persona in config");
+        }
+        mp_persona_set_active(p);
+    }
     mp_vdev_load();
 
     const mp_vdev_t *vdev0 = mp_vdev_at(0);
