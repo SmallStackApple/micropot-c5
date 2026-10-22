@@ -77,7 +77,7 @@ of lwIP's TCP (see below).
 | `components/mp_ftpd` | vsftpd 3.0.3-style FTP honeypot, read-only fs, PASV pool |
 | `components/brands/mp_brand_*` | HIKVISION camera / TP-LINK router / HP printer / Linux 4.19 server behaviour tables (+ file tree, SSH host keys) |
 | `main` | Kconfig + boot sequence |
-| `tools` | PC-side collector, mock attacker, golden regression check |
+| `tools` | PC-side collector, management CLI + web UI, mock attacker, golden regression check |
 | `test/host` | host unit tests for the pure sources (no hardware needed) |
 
 ## Prerequisites
@@ -236,6 +236,27 @@ Linux host with every port closed and the control port filtered.
 - **Serial CLI**: `micropot>` REPL on the UART with the same command set,
   no HMAC — the rescue path when the network is misconfigured.
 - Default PSK `change-me` triggers a `system.config_warn` event at boot.
+
+### Management web UI
+
+`tools/micropot_web.py` is a zero-dependency (stdlib-only) multi-device
+dashboard that speaks the same signed control protocol and tails the
+collector's JSONL logs:
+
+```sh
+cp tools/devices.example.json tools/devices.json   # edit hosts + PSKs
+python3 tools/log_collector.py --host 0.0.0.0 --port 9999 &   # event source
+python3 tools/micropot_web.py                      # http://127.0.0.1:8080
+```
+
+- per-device status (uptime / heap / sessions / TCBs / log drops),
+  JSONL event viewer with live tail and filters, runtime config editor with
+  per-key explanations and sensitive-key warnings, `log.test` / `reset` /
+  `reboot` with tiered confirmations;
+- `devices.json` is git-ignored; a PSK written as `"${ENV_VAR}"` is read
+  from the environment instead of being stored in plaintext;
+- binds `127.0.0.1` by default. Use `--bind 0.0.0.0 --token <secret>`
+  (or env `MICROPOT_WEB_TOKEN`) if it must be reachable from the LAN.
 
 ## Multi virtual devices
 

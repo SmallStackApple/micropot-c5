@@ -11,50 +11,10 @@ Commands: ping, status, list, get K, set K V, unset K, reset,
           log.stats, log.test, reboot
 """
 import argparse
-import hashlib
-import hmac
 import json
-import socket
 import sys
-import time
 
-_id = 0
-
-
-def build_line(psk: str, cmd: str, key: str | None, value: str | None) -> bytes:
-    global _id
-    _id += 1
-    # millisecond ts: the device demands strictly increasing ts per boot,
-    # and second-granularity would rate-limit the CLI to one command/s.
-    parts = [f"id={_id}", f"ts={int(time.time() * 1000)}", f"cmd={cmd}"]
-    if key is not None:
-        parts.append(f"k={key}")
-    msg = " ".join(parts)
-    if value is not None:
-        msg += f" v={value}"
-    mac = hmac.new(psk.encode(), msg.encode(), hashlib.sha256).hexdigest()
-    return f"{msg} mac={mac}\n".encode()
-
-
-def exchange_udp(host: str, port: int, payload: bytes, timeout: float) -> bytes:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.settimeout(timeout)
-        s.sendto(payload, (host, port))
-        data, _ = s.recvfrom(4096)
-        return data
-
-
-def exchange_tcp(host: str, port: int, payload: bytes, timeout: float) -> bytes:
-    with socket.create_connection((host, port), timeout=timeout) as s:
-        s.sendall(payload)
-        s.settimeout(timeout)
-        line = b""
-        while not line.endswith(b"\n"):
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            line += chunk
-        return line
+from micropot_proto import CtlError, call, exchange
 
 
 def main() -> int:
@@ -70,32 +30,22 @@ def main() -> int:
     ap.add_argument("value", nargs="?")
     args = ap.parse_args()
 
-    payload = build_line(args.psk, args.cmd, args.key, args.value)
-    exchange = exchange_tcp if args.tcp else exchange_udp
     try:
-        reply = exchange(args.host, args.port, payload, args.timeout)
-    except (socket.timeout, TimeoutError):
-        print("error: no reply (timeout)", file=sys.stderr)
-        return 1
-    except OSError as e:
+        if args.raw:
+            sys.stdout.write(
+                exchange(args.host, args.port, args.psk, args.cmd,
+                         args.key, args.value, args.tcp, args.timeout)
+                .decode(errors="replace"))
+            return 0
+        result = call(args.host, args.port, args.psk, args.cmd,
+                      args.key, args.value, args.tcp, args.timeout)
+    except CtlError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    if args.raw:
-        sys.stdout.write(reply.decode(errors="replace"))
-        return 0
-    try:
-        obj = json.loads(reply)
-    except json.JSONDecodeError:
-        sys.stdout.write(reply.decode(errors="replace"))
-        return 1
-    if obj.get("ok"):
-        print(json.dumps(obj.get("result"), indent=2, ensure_ascii=False)
-              if isinstance(obj.get("result"), (dict, list))
-              else obj.get("result"))
-        return 0
-    print(f"error: {obj.get('err')}", file=sys.stderr)
-    return 1
+    print(json.dumps(result, indent=2, ensure_ascii=False)
+          if isinstance(result, (dict, list)) else result)
+    return 0
 
 
 if __name__ == "__main__":
