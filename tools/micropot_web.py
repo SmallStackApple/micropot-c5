@@ -120,7 +120,14 @@ class DeviceStore:
             self.save()
 
     def ctl(self, name, cmd, key=None, value=None, timeout=3.0):
-        d = self.devices[name]
+        # Snapshot under the registry lock, then do the network I/O without
+        # holding it. The background poller and HTTP handlers call this
+        # concurrently; micropot_proto serializes the signed ts counter.
+        with self.lock:
+            d = self.devices.get(name)
+            if d is None:
+                raise CtlError("unknown device")
+            d = dict(d)
         if d["psk_missing"]:
             raise CtlError("PSK 来自环境变量但未设置（${...}）")
         return call(d["host"], d["port"], d["psk"], cmd, key, value,
@@ -156,7 +163,9 @@ class DeviceStore:
 
 def poller(store: DeviceStore, stop: threading.Event):
     while not stop.is_set():
-        for name in list(store.devices):
+        with store.lock:
+            names = list(store.devices)
+        for name in names:
             if stop.is_set():
                 break
             rt = store.runtime.get(name)
@@ -1391,6 +1400,13 @@ def main():
                     help="access token required for /api/* "
                          "(or env MICROPOT_WEB_TOKEN)")
     args = ap.parse_args()
+
+    # The dashboard can change runtime config and reboot devices. Never let
+    # a non-loopback bind expose that unauthenticated.
+    loopback = {"127.0.0.1", "::1", "localhost"}
+    if args.bind not in loopback and not args.token:
+        ap.error("--token (or MICROPOT_WEB_TOKEN) is required when "
+                 "--bind is not a loopback address")
 
     TOKEN = args.token
     STORE = DeviceStore(args.config)

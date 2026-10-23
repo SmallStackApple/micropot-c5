@@ -1,0 +1,9 @@
+# Keep line endings identical on Linux and Windows. CRLF in *.sh breaks
+# shebangs under Git Bash/WSL, and LF also keeps EMBED_TXTFILES bytes (the
+# brand HTML pages) identical across build hosts.
+* text=auto eol=lf
+
+# Binary assets must never be converted by core.autocrlf.
+*.der binary
+*.pem binary
+components/brands/mp_brand_linux419/keys/* binary

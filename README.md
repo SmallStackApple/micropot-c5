@@ -5,15 +5,17 @@ ESP32-C5 (module N16R8: 16 MB flash + 8 MB PSRAM). All experiments run only on
 an isolated lab network.
 
 Phase 1 delivers a single device IP hosting concurrent brand-driven honeypot
-services (Telnet + HTTP + banner-level SSH) with structured JSON event logging
-to a PC collector. The architecture is protocol- and brand-agnostic: adding a
-new protocol or a new brand is a pure add-on — no edits to shared code.
+services (Telnet + HTTP + FTP, plus real SSH and banner-level SSH) with
+structured JSON event logging to a PC collector. The architecture is
+protocol- and brand-agnostic: adding a new protocol or a new brand is a pure
+add-on — no edits to shared code.
 
 > **Documentation**
 > - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — component layering, transport & event model
 > - [`docs/MEMORY.md`](docs/MEMORY.md) — HP SRAM/PSRAM/flash budget and allocation policy
 > - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase 1 → phase 2 (multi virtual device)
 > - [`docs/EXTENDING.md`](docs/EXTENDING.md) — adding a brand / protocol / persona
+> - [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md) — native Windows build, flash & host tests
 
 ## Architecture
 
@@ -88,6 +90,10 @@ ESP-IDF **v6.1** (locked). On this machine it has a dedicated activation script:
 source /home/xiaoboluo/.espressif/tools/activate_idf_v6.1.sh
 ```
 
+Windows uses the ESP-IDF 6.1 installer/PowerShell instead of the shell
+script; see [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md) for the native
+build, COM port and host-test notes.
+
 ## Build & flash
 
 ```sh
@@ -98,6 +104,11 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
+`idf.py build` automatically downloads the wolfSSL/wolfSSH components and
+applies the registry patches (`tools/patch_wolfssl.cmake`) during CMake
+configure; no manual patch step is required. If `managed_components/` is
+deleted, run `idf.py reconfigure`.
+
 ## Run it
 
 1. Start the collector on the PC (same isolated LAN):
@@ -105,6 +116,9 @@ idf.py -p /dev/ttyACM0 flash monitor
    ```sh
    python3 tools/log_collector.py --host 0.0.0.0 --port 9999 --proto both
    ```
+
+   On Windows use `python tools\log_collector.py ...` and allow Python
+   through Windows Firewall on private networks.
 
 2. Enter `idf.py menuconfig` → *MicroPot-C5 honeypot* and set:
    - WiFi SSID / password
@@ -360,6 +374,9 @@ curl -i http://$ip/nonexistent      # Apache-style 404 + Server header
 ```sh
 # host unit tests (event builder, form parser, line reader incl. echo/IAC)
 make -C test/host
+
+# Windows: the host tests use POSIX sockets/OpenSSL; run them in WSL2.
+# See docs/BUILD-WINDOWS.md.
 
 # golden behaviour check (needs the hardware): capture a baseline with the
 # old firmware, re-run with the new one, diff the event streams

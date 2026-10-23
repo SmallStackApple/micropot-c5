@@ -11,13 +11,19 @@ Replies are JSON: {"id":N,"ok":true,"result":...} or
 
 Used by micropotctl.py (CLI) and micropot_web.py (web UI).
 """
+
+from __future__ import annotations
+
 import hashlib
 import hmac
 import json
 import socket
+import threading
 import time
 
 _id = 0
+_last_ts = 0
+_lock = threading.Lock()
 
 
 class CtlError(Exception):
@@ -26,11 +32,19 @@ class CtlError(Exception):
 
 def build_line(psk: str, cmd: str, key: str | None = None,
                value: str | None = None) -> bytes:
-    global _id
-    _id += 1
-    # millisecond ts: the device demands strictly increasing ts per boot,
-    # and second-granularity would rate-limit callers to one command/s.
-    parts = [f"id={_id}", f"ts={int(time.time() * 1000)}", f"cmd={cmd}"]
+    global _id, _last_ts
+    # Millisecond ts: the device demands strictly increasing ts per boot.
+    # Same-millisecond calls (web UI poller + user command) and wall-clock
+    # steps must not produce a duplicate or backward ts, so serialize the
+    # counter and force monotonicity. Separate client processes can still
+    # collide; that is a device-side policy limitation.
+    with _lock:
+        _id += 1
+        req_id = _id
+        now_ms = int(time.time() * 1000)
+        _last_ts = max(_last_ts + 1, now_ms)
+        ts = _last_ts
+    parts = [f"id={req_id}", f"ts={ts}", f"cmd={cmd}"]
     if key is not None:
         parts.append(f"k={key}")
     msg = " ".join(parts)
