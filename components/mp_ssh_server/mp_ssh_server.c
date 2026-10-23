@@ -16,7 +16,6 @@
 #include <string.h>
 
 #include "esp_log.h"
-#include "esp_random.h"
 #include "esp_timer.h"
 
 #include <wolfssl/ssl.h>
@@ -33,14 +32,6 @@
 void mp_wolfmem_anchor(void);
 
 static const char *TAG = "mp_sshd";
-
-/* wolfSSL's ESP user_settings.h delegates the RNG seed to us
- * (CUSTOM_RAND_GENERATE_SEED): feed it the C5 hardware entropy source. */
-int mp_wolfssl_rand_seed(unsigned char *output, unsigned int sz)
-{
-    esp_fill_random(output, sz);
-    return 0;
-}
 
 #define IO_RECV_TIMEOUT_MS 30000
 #define PREAUTH_GRACE_MS   120000 /* OpenSSH LoginGraceTime default */

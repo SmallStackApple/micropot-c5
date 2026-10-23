@@ -53,6 +53,17 @@ not need to run any patch script manually. If the patch script reports an
 anchor error, the wolfSSL/wolfSSH versions have drifted: keep the exact
 versions pinned in `main/idf_component.yml` (or update the patch script).
 
+The pinned wolfSSL 5.8.2~1 predates both ESP-IDF 6.1 and the ESP32-C5, so
+the script also makes it build on this target:
+
+- ESP-IDF 6.1 compiles C as `gnu23`, where `thread_local` is a keyword;
+  the `esp_sdk_mem_lib.c` enum member is renamed.
+- `esp32_util.c` gets an ESP32-C5 watchdog branch so it uses
+  `esp_task_wdt_*()` instead of the ESP32/S2-only `rtc_wdt_*()`.
+- `user_settings.h` gets an ESP32-C5 branch that defines `WOLFSSL_ESP32`
+  (software crypto only). Without it `random.c` provides no
+  `wc_GenerateSeed()` and the link fails.
+
 If you ever delete `managed_components/`, re-run:
 
 ```powershell
